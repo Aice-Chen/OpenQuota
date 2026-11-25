@@ -8,7 +8,12 @@
   import ProviderLinks from './ProviderLinks.svelte';
   import ProviderNoticeRow from './ProviderNoticeRow.svelte';
   import Icon from './Icon.svelte';
-  import { t, translateBackendText, translateMetricLabel } from './i18n.svelte';
+  import {
+    t,
+    translateBackendText,
+    translateMetricLabel,
+    translateUpdateFailure,
+  } from './i18n.svelte';
   import MetricRenderer from './MetricRenderer.svelte';
   import TotalSpend from './TotalSpend.svelte';
   import type { SpendProjection } from './totalSpend';
@@ -359,8 +364,10 @@
                 : t('dashboard.downloadingUpdatePercent', { percent: updateProgress.percent })}
         </small>
       {/if}
-      {#if updateError}<div class="update-error" role="alert">
-          <strong>{updateError.message}</strong><small>{updateError.action}</small>
+      {#if updateError}{@const localizedUpdateError = translateUpdateFailure(updateError)}
+        <div class="update-error" role="alert">
+          <strong>{localizedUpdateError.message}</strong><small>{localizedUpdateError.action}</small
+          >
         </div>{/if}
     </div>
     <div class="update-actions">

@@ -2,16 +2,17 @@
   <img src="assets/openquota-icon.png" alt="OpenQuota logo" width="88">
 </p>
 
-<h1 align="center">OpenQuota</h1>
+<h1 align="center">OpenQuota (Enhanced Fork)</h1>
 
 <p align="center">
-  Track usage and limits across your AI coding tools.
+  Track usage and limits across your AI coding tools — independently maintained fork of <a href="https://github.com/deviffyy/OpenQuota">deviffyy/OpenQuota</a> (MIT License).<br>
+  基于 MIT 协议的独立演进增强版：原生支持中英文切换（含系统托盘与通知）、修复 Antigravity 额度读取、独立签名自动更新与模型定价热更新。
 </p>
 
 <p align="center">
-  <a href="https://github.com/deviffyy/OpenQuota/actions/workflows/ci.yml"><img src="https://github.com/deviffyy/OpenQuota/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <a href="https://github.com/deviffyy/OpenQuota/releases/latest"><img src="https://img.shields.io/github/v/release/deviffyy/OpenQuota" alt="Latest release"></a>
-  <a href="https://github.com/deviffyy/OpenQuota/releases"><img src="https://img.shields.io/github/downloads/deviffyy/OpenQuota/total" alt="Total downloads"></a>
+  <a href="https://github.com/Aice-Chen/OpenQuota/actions/workflows/build-windows.yml"><img src="https://github.com/Aice-Chen/OpenQuota/actions/workflows/build-windows.yml/badge.svg" alt="Windows build status"></a>
+  <a href="https://github.com/Aice-Chen/OpenQuota/releases/latest"><img src="https://img.shields.io/github/v/release/Aice-Chen/OpenQuota" alt="Latest release"></a>
+  <a href="https://github.com/Aice-Chen/OpenQuota/releases"><img src="https://img.shields.io/github/downloads/Aice-Chen/OpenQuota/total" alt="Total downloads"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
 </p>
 
@@ -25,11 +26,11 @@ spend at a glance.
 
 ## Download
 
-| Platform | Available builds                           | Download                                                                      |
-| -------- | ------------------------------------------ | ----------------------------------------------------------------------------- |
-| Windows  | x64 and ARM64 installers                   | [Download for Windows](https://github.com/deviffyy/OpenQuota/releases/latest) |
-| macOS    | Universal DMG for Apple Silicon and Intel  | [Download for macOS](https://github.com/deviffyy/OpenQuota/releases/latest)   |
-| Linux    | x64 and ARM64 AppImage and Debian packages | [Download for Linux](https://github.com/deviffyy/OpenQuota/releases/latest)   |
+| Platform | Available builds                           | Download                                                                       |
+| -------- | ------------------------------------------ | ------------------------------------------------------------------------------ |
+| Windows  | x64 and ARM64 installers                   | [Download for Windows](https://github.com/Aice-Chen/OpenQuota/releases/latest) |
+| macOS    | Universal DMG for Apple Silicon and Intel  | [Download for macOS](https://github.com/Aice-Chen/OpenQuota/releases/latest)   |
+| Linux    | x64 and ARM64 AppImage and Debian packages | [Download for Linux](https://github.com/Aice-Chen/OpenQuota/releases/latest)   |
 
 Open the latest release and choose the file for your platform:
 

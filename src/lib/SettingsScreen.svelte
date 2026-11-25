@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { PanelHeightMode } from './backend';
   import Icon from './Icon.svelte';
-  import { t, translateBackendText } from './i18n.svelte';
+  import { t, translateBackendText, translateUpdateFailure } from './i18n.svelte';
   import type { DesktopPlatform } from './platform';
   import SelectMenu from './SelectMenu.svelte';
   import type {
@@ -449,8 +449,9 @@
         >{checkingUpdate ? t('settings.checking') : t('app.checkForUpdates')}</button
       >
     </div>
-    {#if updateError}<div class="settings-update-error" role="alert">
-        <b>{updateError.message}</b><small>{updateError.action}</small>
+    {#if updateError}{@const localizedUpdateError = translateUpdateFailure(updateError)}
+      <div class="settings-update-error" role="alert">
+        <b>{localizedUpdateError.message}</b><small>{localizedUpdateError.action}</small>
       </div>{/if}
   </div>
 

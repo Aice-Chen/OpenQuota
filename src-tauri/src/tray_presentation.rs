@@ -12,6 +12,8 @@ use crate::{
 };
 
 const TRAY_ID: &str = "openquota-tray";
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_MAX_TOOLTIP_UTF16: usize = 127;
 
 #[derive(Debug, Clone, PartialEq)]
 struct TrayMetric {
@@ -71,9 +73,11 @@ pub fn update(
                 .join(" · ")
         )
     };
+    #[cfg(target_os = "windows")]
+    let tooltip = truncate_windows_tooltip(&tooltip);
     #[cfg(not(target_os = "linux"))]
-    if tray.set_tooltip(Some(tooltip)).is_err() {
-        crate::app_warn!("tray", "tray tooltip update failed");
+    if let Err(error) = tray.set_tooltip(Some(tooltip)) {
+        crate::app_warn!("tray", "tray tooltip update failed: {error}");
     }
     #[cfg(target_os = "linux")]
     let _ = tooltip;
@@ -83,8 +87,8 @@ pub fn update(
         let icon = primary_gauge(&groups)
             .map(|gauge| tray_icon::render_gauge(gauge.display_fraction, gauge.remaining_fraction))
             .unwrap_or_else(mark_icon);
-        if tray.set_icon(Some(icon)).is_err() {
-            crate::app_warn!("tray", "tray icon update failed");
+        if let Err(error) = tray.set_icon(Some(icon)) {
+            crate::app_warn!("tray", "tray icon update failed: {error}");
         }
     }
 
@@ -278,13 +282,9 @@ fn tray_metric_localized(
                             UsageDisplay::Used => used,
                             UsageDisplay::Left => (limit - used).max(0.0),
                         };
-                        let word = match (display, zh) {
-                            (UsageDisplay::Used, true) => "已用",
-                            (UsageDisplay::Left, true) => "剩余",
-                            (UsageDisplay::Used, false) => "used",
-                            (UsageDisplay::Left, false) => "left",
-                        };
-                        let unit = quota.unit.as_deref().unwrap_or("requests");
+                        let word = crate::i18n::tray_usage_word(display == UsageDisplay::Used, zh);
+                        let raw_unit = quota.unit.as_deref().unwrap_or("requests");
+                        let unit = crate::i18n::translate_unit(raw_unit, zh);
                         let detail = if zh {
                             format!("{label} {word} {value:.0} {unit}")
                         } else {
@@ -310,12 +310,7 @@ fn tray_metric_localized(
                     UsageDisplay::Left => 1.0 - used_fraction,
                 };
                 let percent = display_fraction * 100.0;
-                let word = match (display, zh) {
-                    (UsageDisplay::Used, true) => "已用",
-                    (UsageDisplay::Left, true) => "剩余",
-                    (UsageDisplay::Used, false) => "used",
-                    (UsageDisplay::Left, false) => "left",
-                };
+                let word = crate::i18n::tray_usage_word(display == UsageDisplay::Used, zh);
                 let detail = if zh {
                     format!("{label} {word} {percent:.0}%")
                 } else {
@@ -332,15 +327,14 @@ fn tray_metric_localized(
                 }
             })
     };
+    let suffix = tray.suffix.as_deref();
     match &definition.source {
         MetricSource::Quota { source_id, .. } => quota(source_id),
         MetricSource::QuotaOrValue { source_id, .. } => {
-            quota(source_id).or_else(|| value_metric(snapshot, source_id, tray.suffix.as_deref()))
+            quota(source_id).or_else(|| value_metric(snapshot, source_id, suffix, zh))
         }
-        MetricSource::Value { source_id } => {
-            value_metric(snapshot, source_id, tray.suffix.as_deref())
-        }
-        MetricSource::Status { source_id } => status_metric(snapshot, source_id),
+        MetricSource::Value { source_id } => value_metric(snapshot, source_id, suffix, zh),
+        MetricSource::Status { source_id } => status_metric(snapshot, source_id, zh),
         MetricSource::Usage { period } => usage_metric(
             crate::i18n::translate_metric_label(&definition.label, zh),
             usage_period(snapshot, *period),
@@ -357,14 +351,15 @@ fn usage_period(snapshot: &ProviderSnapshot, period: UsagePeriodSelection) -> Op
     }
 }
 
-fn status_metric(snapshot: &ProviderSnapshot, source_id: &str) -> Option<TrayMetric> {
+fn status_metric(snapshot: &ProviderSnapshot, source_id: &str, zh: bool) -> Option<TrayMetric> {
     let metric = snapshot
         .status_metrics
         .iter()
         .find(|metric| metric.id == source_id)?;
+    let label = crate::i18n::translate_metric_label(&metric.label, zh);
     Some(TrayMetric {
         value: metric.text.clone(),
-        detail: format!("{} {}", metric.label, metric.text),
+        detail: format!("{label} {}", metric.text),
         gauge: None,
     })
 }
@@ -373,6 +368,7 @@ fn value_metric(
     snapshot: &ProviderSnapshot,
     source_id: &str,
     tray_suffix: Option<&str>,
+    zh: bool,
 ) -> Option<TrayMetric> {
     let metric = snapshot
         .value_metrics
@@ -387,15 +383,16 @@ fn value_metric(
     let detail = metric
         .values
         .iter()
-        .map(format_detail_value)
+        .map(|item| format_detail_value(item, zh))
         .collect::<Vec<_>>()
         .join(" · ");
     let value = tray_suffix
         .map(|suffix| format!("{value} {suffix}"))
         .unwrap_or(value);
+    let label = crate::i18n::translate_metric_label(&metric.label, zh);
     Some(TrayMetric {
         value,
-        detail: format!("{} {detail}", metric.label),
+        detail: format!("{label} {detail}"),
         gauge: None,
     })
 }
@@ -412,7 +409,7 @@ fn format_tray_value(value: &MetricValue) -> String {
         .unwrap_or(number)
 }
 
-fn format_detail_value(value: &MetricValue) -> String {
+fn format_detail_value(value: &MetricValue, zh: bool) -> String {
     let number = match value.kind {
         MetricValueKind::Dollars => format!("${:.2}", value.number),
         MetricValueKind::Count => format!("{:.0}", value.number),
@@ -420,7 +417,7 @@ fn format_detail_value(value: &MetricValue) -> String {
     value
         .label
         .as_deref()
-        .map(|label| format!("{number} {label}"))
+        .map(|label| format!("{number} {}", crate::i18n::translate_unit(label, zh)))
         .unwrap_or(number)
 }
 
@@ -446,6 +443,24 @@ fn format_tokens(tokens: u64) -> String {
     } else {
         tokens.to_string()
     }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn truncate_windows_tooltip(tooltip: &str) -> String {
+    if tooltip.encode_utf16().count() <= WINDOWS_MAX_TOOLTIP_UTF16 {
+        return tooltip.to_owned();
+    }
+    let mut units = 0;
+    let mut end = 0;
+    for (index, ch) in tooltip.char_indices() {
+        let next = units + ch.len_utf16();
+        if next >= WINDOWS_MAX_TOOLTIP_UTF16 {
+            break;
+        }
+        units = next;
+        end = index + ch.len_utf8();
+    }
+    format!("{}…", tooltip[..end].trim_end())
 }
 
 fn mark_icon() -> Image<'static> {
@@ -889,5 +904,16 @@ mod tests {
             metrics: vec![metric],
         }])
         .is_empty());
+    }
+
+    #[test]
+    fn windows_tooltip_truncates_safely_within_utf16_limit() {
+        let short = "OpenQuota\nAntigravity 会话 剩余 80%";
+        assert_eq!(super::truncate_windows_tooltip(short), short);
+
+        let long = "OpenQuota\n".to_owned() + &"Antigravity 会话 剩余 80% · ".repeat(10);
+        let truncated = super::truncate_windows_tooltip(&long);
+        assert!(truncated.ends_with('…'));
+        assert!(truncated.encode_utf16().count() <= super::WINDOWS_MAX_TOOLTIP_UTF16);
     }
 }

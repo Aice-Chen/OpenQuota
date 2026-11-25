@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       create_release:
-        description: Publish or update a GitHub Release tag with updater latest.json (optional, e.g. v0.5.0)
+        description: Publish or update a GitHub Release tag with updater latest.json (optional, e.g. v0.5.1)
         required: false
         default: ''
         type: string
@@ -19,6 +19,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v7
         with:
@@ -90,7 +92,18 @@ jobs:
           }
           $sigPath = "$($installer.FullName).sig"
           $uploadFiles = @($installer.FullName)
-          $notes = 'Custom Windows build with Antigravity quota fix and switchable Chinese/English UI.'
+
+          $prevTag = (git tag --sort=-creatordate | Where-Object { $_ -ne $env:RELEASE_TAG } | Select-Object -First 1)
+          $changes = if ($prevTag) {
+            @(git log "$prevTag..HEAD" --no-merges --pretty=format:'- %s')
+          } else {
+            @(git log -n 10 --no-merges --pretty=format:'- %s')
+          }
+          $notes = if ($changes.Count -gt 0) {
+            "OpenQuota $env:RELEASE_TAG`n`n" + ($changes -join "`n")
+          } else {
+            'Custom Windows build with Antigravity quota fix and switchable Chinese/English UI.'
+          }
 
           if (Test-Path $sigPath) {
             $uploadFiles += $sigPath
@@ -116,16 +129,37 @@ jobs:
             $uploadFiles += $latestPath
           }
 
+          git tag -f $env:RELEASE_TAG
+          git push origin "refs/tags/$env:RELEASE_TAG" --force
+
           $exists = $false
           try {
-            gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY | Out-Null
+            gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY 2>$null | Out-Null
             $exists = ($LASTEXITCODE -eq 0)
           } catch {
             $exists = $false
           }
 
           if (-not $exists) {
-            gh release create $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --draft --title "OpenQuota $env:RELEASE_TAG" --notes $notes
+            gh release create $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --verify-tag --draft --title "OpenQuota $env:RELEASE_TAG" --notes $notes
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create draft release.' }
           }
-          gh release upload $env:RELEASE_TAG @uploadFiles --repo $env:GITHUB_REPOSITORY --clobber
+
+          foreach ($file in $uploadFiles) {
+            $uploaded = $false
+            for ($attempt = 1; $attempt -le 4; $attempt++) {
+              Write-Host "Uploading $(Split-Path -Leaf $file) (attempt $attempt/4)..."
+              gh release upload $env:RELEASE_TAG $file --repo $env:GITHUB_REPOSITORY --clobber
+              if ($LASTEXITCODE -eq 0) {
+                $uploaded = $true
+                break
+              }
+              Start-Sleep -Seconds ($attempt * 3)
+            }
+            if (-not $uploaded) {
+              throw "Failed to upload release asset after 4 attempts: $file"
+            }
+          }
+
           gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --draft=false --latest --title "OpenQuota $env:RELEASE_TAG" --notes $notes
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish release.' }

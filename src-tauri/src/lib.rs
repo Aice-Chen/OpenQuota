@@ -65,37 +65,27 @@ fn build_tray_menu(
     app: &AppHandle,
     language: models::LanguagePreference,
 ) -> Result<Menu<tauri::Wry>, tauri::Error> {
-    let zh = i18n::is_zh(language);
+    let labels = i18n::tray_menu_labels(i18n::is_zh(language));
     #[cfg(target_os = "macos")]
     {
-        let (settings_label, quit_label) = if zh {
-            ("设置", "退出 OpenQuota")
-        } else {
-            ("Settings", "Quit OpenQuota")
-        };
-        let settings =
-            MenuItem::with_id(app, "settings", settings_label, true, Some("CmdOrCtrl+,"))?;
+        let settings = MenuItem::with_id(
+            app,
+            "settings",
+            &labels.settings_mac,
+            true,
+            Some("CmdOrCtrl+,"),
+        )?;
         let separator = PredefinedMenuItem::separator(app)?;
-        let quit = MenuItem::with_id(app, "quit", quit_label, true, Some("CmdOrCtrl+Q"))?;
+        let quit = MenuItem::with_id(app, "quit", &labels.quit, true, Some("CmdOrCtrl+Q"))?;
         Menu::with_items(app, &[&settings, &separator, &quit])
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let (open_label, customize_label, settings_label, quit_label) = if zh {
-            ("打开 OpenQuota", "自定义…", "设置…", "退出 OpenQuota")
-        } else {
-            (
-                "Open OpenQuota",
-                "Customize…",
-                "Settings…",
-                "Quit OpenQuota",
-            )
-        };
-        let open = MenuItem::with_id(app, "open", open_label, true, None::<&str>)?;
-        let customize = MenuItem::with_id(app, "customize", customize_label, true, None::<&str>)?;
-        let settings = MenuItem::with_id(app, "settings", settings_label, true, None::<&str>)?;
+        let open = MenuItem::with_id(app, "open", &labels.open, true, None::<&str>)?;
+        let customize = MenuItem::with_id(app, "customize", &labels.customize, true, None::<&str>)?;
+        let settings = MenuItem::with_id(app, "settings", &labels.settings, true, None::<&str>)?;
         let separator = PredefinedMenuItem::separator(app)?;
-        let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
+        let quit = MenuItem::with_id(app, "quit", &labels.quit, true, None::<&str>)?;
         Menu::with_items(app, &[&open, &customize, &settings, &separator, &quit])
     }
 }
@@ -106,12 +96,12 @@ pub(crate) fn update_tray_menu(app: &AppHandle, language: models::LanguagePrefer
     };
     match build_tray_menu(app, language) {
         Ok(menu) => {
-            if tray.set_menu(Some(menu)).is_err() {
-                app_warn!("tray", "tray menu language update failed");
+            if let Err(error) = tray.set_menu(Some(menu)) {
+                app_warn!("tray", "tray menu language update failed: {error}");
             }
         }
-        Err(_) => {
-            app_warn!("tray", "tray menu rebuild failed");
+        Err(error) => {
+            app_warn!("tray", "tray menu rebuild failed: {error}");
         }
     }
 }

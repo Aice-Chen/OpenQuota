@@ -1,0 +1,93 @@
+{
+  "metricLabels": {
+    "Session": "会话",
+    "Weekly": "每周",
+    "Extra Usage": "额外用量",
+    "Extra Balance": "额外余额",
+    "Usage Trend": "用量趋势",
+    "Today": "今日",
+    "Yesterday": "昨天",
+    "Last 30 Days": "近 30 天",
+    "Rate Limit Resets": "限额重置券",
+    "Credits": "点数",
+    "Balance": "余额",
+    "This Week": "本周",
+    "This Month": "本月",
+    "Key Limit": "密钥限额",
+    "Claude Weekly": "Claude 每周",
+    "Spark Weekly": "Spark 每周",
+    "Requests": "请求数",
+    "Auto": "自动",
+    "Total": "总计",
+    "Total Usage": "总用量",
+    "Auto Usage": "自动模式用量",
+    "API Usage": "API 用量",
+    "Chat": "对话",
+    "Completions": "代码补全",
+    "Premium Requests": "高级请求",
+    "Org Billing": "组织账单",
+    "Org Credits": "组织点数",
+    "Org Spend": "组织支出",
+    "Web Searches": "联网搜索",
+    "Monthly": "每月",
+    "Daily": "每日",
+    "5-Hour": "5 小时"
+  },
+  "linkLabels": {
+    "Status": "服务状态",
+    "Dashboard": "控制台",
+    "Usage": "用量",
+    "Activity": "活动记录",
+    "Credits": "额度与账单",
+    "API Keys": "API 密钥"
+  },
+  "units": {
+    "requests": "次请求",
+    "credits": "点数",
+    "available": "张可用",
+    "searches": "次搜索",
+    "resets": "次重置"
+  },
+  "trayMenu": {
+    "en": {
+      "open": "Open OpenQuota",
+      "customize": "Customize…",
+      "settings": "Settings…",
+      "settingsMac": "Settings",
+      "quit": "Quit OpenQuota"
+    },
+    "zh-CN": {
+      "open": "打开 OpenQuota",
+      "customize": "自定义…",
+      "settings": "设置…",
+      "settingsMac": "设置",
+      "quit": "退出 OpenQuota"
+    }
+  },
+  "trayUsage": {
+    "en": {
+      "used": "used",
+      "left": "left"
+    },
+    "zh-CN": {
+      "used": "已用",
+      "left": "剩余"
+    }
+  },
+  "paceAlerts": {
+    "zh-CN": {
+      "almostOut": {
+        "title": "额度即将耗尽",
+        "body": "当前周期剩余额度已不足 10%。"
+      },
+      "cuttingItClose": {
+        "title": "进度偏紧",
+        "body": "按当前消耗速度，预计将接近限额。"
+      },
+      "willRunOut": {
+        "title": "预计提前耗尽",
+        "body": "按当前消耗速度，预计会在重置前用完额度。"
+      }
+    }
+  }
+}

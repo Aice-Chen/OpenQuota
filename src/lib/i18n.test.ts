@@ -3,10 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   dictionaries,
   i18n,
+  sharedDictionary,
   t,
   translateBackendText,
   translateLinkLabel,
   translateMetricLabel,
+  translateUnit,
+  translateUpdateFailure,
 } from './i18n.svelte';
 import { formatReset } from './pacing';
 import QuotaMetric from './QuotaMetric.svelte';
@@ -102,5 +105,45 @@ describe('i18n localization', () => {
     expect(screen.getByText('会话')).toBeInTheDocument();
     expect(screen.getByText('剩余 75%')).toBeInTheDocument();
     expect(screen.getByText('3小时后重置')).toBeInTheDocument();
+  });
+
+  it('translates all 12 provider backend errors, shared metrics, and updater error codes in Chinese', () => {
+    i18n.setPreference('zhCn');
+    expect(sharedDictionary.metricLabels['Web Searches']).toBe('联网搜索');
+    expect(translateMetricLabel('Total Usage')).toBe('总用量');
+    expect(translateMetricLabel('Org Spend')).toBe('组织支出');
+    expect(translateUnit('searches')).toBe('次搜索');
+
+    expect(translateBackendText('Not logged in. Run `codex` to authenticate.')).toBe(
+      '尚未登录，请运行 `codex` 完成认证。',
+    );
+    expect(translateBackendText('Could not reach GitHub. Check your internet connection.')).toBe(
+      '无法连接到 GitHub，请检查网络连接。',
+    );
+    expect(translateBackendText('Cursor usage request failed (HTTP 429).')).toBe(
+      'Cursor 请求失败（HTTP 429）。',
+    );
+    expect(translateBackendText('Add a Kimi API key in Customize or set KIMI_API_KEY.')).toBe(
+      '请在「自定义」中添加 Kimi API 密钥，或设置环境变量 KIMI_API_KEY。',
+    );
+
+    const failure = translateUpdateFailure({
+      code: 'signature_invalid',
+      message: 'The downloaded update failed its security check.',
+      action: 'Do not install this download.',
+      retryable: false,
+    });
+    expect(failure.message).toBe('下载的更新包未通过安全签名校验。');
+    expect(failure.action).toContain('请勿安装该文件');
+
+    i18n.setPreference('en');
+    expect(
+      translateUpdateFailure({
+        code: 'signature_invalid',
+        message: 'Raw English message.',
+        action: 'Raw English action.',
+        retryable: false,
+      }).message,
+    ).toBe('Raw English message.');
   });
 });

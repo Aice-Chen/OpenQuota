@@ -70,7 +70,7 @@ fn deliver(app: &AppHandle, alerts: &[PaceAlert], language: LanguagePreference) 
             let (title, body) = i18n::pace_alert_copy(alert.milestone, language);
             let metric = i18n::translate_metric_label(&alert.metric, zh);
             let message = format!("{} · {metric}\n{body}", alert.provider);
-            let result = show(app, title, &message);
+            let result = show(app, title, &message, zh);
             if result.is_ok() {
                 crate::app_info!("notifications", "pace alert delivered");
                 None
@@ -82,11 +82,13 @@ fn deliver(app: &AppHandle, alerts: &[PaceAlert], language: LanguagePreference) 
         .collect()
 }
 
-fn show(app: &AppHandle, title: &str, body: &str) -> Result<(), String> {
+fn show(app: &AppHandle, title: &str, body: &str, zh: bool) -> Result<(), String> {
     let mut notification = notify_rust::Notification::new();
     notification.summary(title).body(body).appname("OpenQuota");
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    notification.action("default", "Open OpenQuota");
+    notification.action("default", &i18n::tray_menu_labels(zh).open);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = zh;
     #[cfg(target_os = "windows")]
     notification.app_id(&app.config().identifier);
     #[cfg(target_os = "macos")]
