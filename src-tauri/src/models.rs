@@ -619,11 +619,11 @@ pub enum ResetDisplay {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum LanguagePreference {
+    En,
+    ZhCn,
     #[default]
     #[serde(other)]
     System,
-    En,
-    ZhCn,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

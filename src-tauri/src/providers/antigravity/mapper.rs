@@ -402,11 +402,7 @@ pub fn build_legacy_quotas(configs: Vec<ModelConfig>) -> Vec<QuotaWindow> {
                 .model_id
                 .as_deref()
                 .is_some_and(|id| id.to_ascii_lowercase().contains("gemini"));
-        let pool = if is_gemini {
-            &mut gemini
-        } else {
-            &mut claude
-        };
+        let pool = if is_gemini { &mut gemini } else { &mut claude };
         if pool
             .as_ref()
             .is_none_or(|(remaining, _)| config.remaining_fraction < *remaining)

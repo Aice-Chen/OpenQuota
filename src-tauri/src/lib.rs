@@ -84,7 +84,12 @@ fn build_tray_menu(
         let (open_label, customize_label, settings_label, quit_label) = if zh {
             ("打开 OpenQuota", "自定义…", "设置…", "退出 OpenQuota")
         } else {
-            ("Open OpenQuota", "Customize…", "Settings…", "Quit OpenQuota")
+            (
+                "Open OpenQuota",
+                "Customize…",
+                "Settings…",
+                "Quit OpenQuota",
+            )
         };
         let open = MenuItem::with_id(app, "open", open_label, true, None::<&str>)?;
         let customize = MenuItem::with_id(app, "customize", customize_label, true, None::<&str>)?;

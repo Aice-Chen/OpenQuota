@@ -267,12 +267,8 @@ impl AntigravityProvider {
             CloudOutcome::Unavailable => {}
         }
 
-        match self.cloud_code_with_project(
-            RETRIEVE_QUOTA_PATH,
-            token,
-            project,
-            CloudUserAgent::Agy,
-        ) {
+        match self.cloud_code_with_project(RETRIEVE_QUOTA_PATH, token, project, CloudUserAgent::Agy)
+        {
             CloudOutcome::Ok(value) => {
                 let fallback = build_legacy_quotas(parse_quota_buckets(&value));
                 if !fallback.is_empty() {
@@ -327,12 +323,10 @@ impl AntigravityProvider {
             CloudUserAgent::Antigravity,
         );
         let outcome = match primary {
-            CloudOutcome::Unavailable => self.client.cloud_code(
-                LOAD_CODE_ASSIST_PATH,
-                token,
-                json!({}),
-                CloudUserAgent::Agy,
-            ),
+            CloudOutcome::Unavailable => {
+                self.client
+                    .cloud_code(LOAD_CODE_ASSIST_PATH, token, json!({}), CloudUserAgent::Agy)
+            }
             other => other,
         };
         match outcome {
