@@ -8,6 +8,11 @@ on:
         required: false
         default: ''
         type: string
+      run_full_checks:
+        description: Also re-run lint, typecheck, clippy, unit tests, and NSIS smoke test (slower)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -42,15 +47,20 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify contracts and frontend
+      - name: Verify versions and contracts
         run: |
           pnpm verify:versions
           pnpm verify:contracts
+
+      - name: Verify frontend (optional)
+        if: ${{ inputs.run_full_checks }}
+        run: |
           pnpm lint
           pnpm check
           pnpm test
 
-      - name: Verify Rust
+      - name: Verify Rust (optional)
+        if: ${{ inputs.run_full_checks }}
         run: |
           cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
@@ -68,7 +78,8 @@ jobs:
             pnpm build:installer
           }
 
-      - name: Smoke test packaged application
+      - name: Smoke test packaged application (optional)
+        if: ${{ inputs.run_full_checks }}
         uses: ./.github/actions/platform-smoke
 
       - name: Upload Windows installer artifact
@@ -90,6 +101,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+          $OutputEncoding = [Console]::OutputEncoding
           $nsisDir = 'src-tauri/target/release/bundle/nsis'
           $installer = Get-ChildItem -Path $nsisDir -Filter '*-setup.exe' | Select-Object -First 1
           if (-not $installer) {

@@ -40,11 +40,13 @@ signature verification before installing.
    gh workflow run build-windows.yml --repo Aice-Chen/OpenQuota -f create_release=v0.6.0
    ```
 
-   The workflow:
-   - Runs all contract, frontend, and Rust checks (`fmt`, `clippy`, unit tests) on `windows-latest`.
+   By default (`run_full_checks=false`), the release workflow skips duplicating heavy lint/clippy/unit
+   tests (which already run locally via `pnpm verify` and on `ci.yml`) to keep signed builds fast:
+   - Verifies versions and contracts (`pnpm verify:versions`, `pnpm verify:contracts`).
    - Builds the Windows NSIS installer with `src-tauri/tauri.release.conf.json` to emit the `.sig`
      signature alongside `OpenQuota_<version>_x64-setup.exe`.
-   - Runs the packaged Windows NSIS install/start/uninstall smoke test.
+   - Pass `-f run_full_checks=true` if you also want the release job to re-run frontend/Rust tests
+     and the packaged NSIS install/start/uninstall smoke test.
    - Generates `latest.json` via `.github/scripts/create-updater-json.mjs`.
    - Creates or updates the GitHub Release and uploads the installer, `.sig`, and `latest.json` with
      automatic retries.
