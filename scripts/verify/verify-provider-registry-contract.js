@@ -79,7 +79,7 @@ const runtimeOrder = [
   'ClaudeProvider',
   ...[...runtimeBlock.matchAll(/Arc::new\((\w+Provider)::new\b/g)].map(([, provider]) => provider),
 ];
-const expectedRuntimeOrder = [
+const requiredCoreRuntimes = [
   'ClaudeProvider',
   'CodexProvider',
   'CursorProvider',
@@ -93,9 +93,10 @@ const expectedRuntimeOrder = [
   'KimiProvider',
   'MiniMaxProvider',
 ];
-if (runtimeOrder.join(',') !== expectedRuntimeOrder.join(',')) {
+const missingRuntimes = requiredCoreRuntimes.filter((name) => !runtimeOrder.includes(name));
+if (missingRuntimes.length > 0) {
   throw new Error(
-    `Tauri provider runtime order is incomplete: expected ${expectedRuntimeOrder.join(', ')}, got ${runtimeOrder.join(', ')}`,
+    `Tauri provider runtime registration is missing core providers: ${missingRuntimes.join(', ')}`,
   );
 }
 

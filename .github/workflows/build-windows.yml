@@ -1,10 +1,10 @@
-name: Build Windows Installer
+name: Build & Release Windows
 
 on:
   workflow_dispatch:
     inputs:
       create_release:
-        description: Publish or update a GitHub Release tag with updater latest.json (optional, e.g. v0.5.1)
+        description: Publish or update a GitHub Release tag with updater latest.json (optional, e.g. v0.6.0)
         required: false
         default: ''
         type: string
@@ -52,6 +52,7 @@ jobs:
 
       - name: Verify Rust
         run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 
@@ -66,6 +67,9 @@ jobs:
           } else {
             pnpm build:installer
           }
+
+      - name: Smoke test packaged application
+        uses: ./.github/actions/platform-smoke
 
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v7
@@ -86,7 +90,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Filter '*-setup.exe' | Select-Object -First 1
+          $nsisDir = 'src-tauri/target/release/bundle/nsis'
+          $installer = Get-ChildItem -Path $nsisDir -Filter '*-setup.exe' | Select-Object -First 1
           if (-not $installer) {
             throw 'Windows NSIS installer not found.'
           }
@@ -102,30 +107,27 @@ jobs:
           $notes = if ($changes.Count -gt 0) {
             "OpenQuota $env:RELEASE_TAG`n`n" + ($changes -join "`n")
           } else {
-            'Custom Windows build with Antigravity quota fix and switchable Chinese/English UI.'
+            'Windows enhanced build of OpenQuota.'
           }
 
           if (Test-Path $sigPath) {
             $uploadFiles += $sigPath
             $tauriConf = Get-Content -Raw 'src-tauri/tauri.conf.json' | ConvertFrom-Json
             $version = $tauriConf.version
-            $signature = (Get-Content -Raw $sigPath).Trim()
-            $downloadUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$([System.Uri]::EscapeDataString($env:RELEASE_TAG))/$([System.Uri]::EscapeDataString($installer.Name))"
-            $entry = @{
-              signature = $signature
-              url       = $downloadUrl
+            $manifestPath = Join-Path $env:RUNNER_TEMP 'release-manifest.json'
+            $manifest = [ordered]@{
+              body       = $notes
+              created_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+              assets     = @(
+                @{ id = 1; name = $installer.Name },
+                @{ id = 2; name = "$($installer.Name).sig" }
+              )
             }
-            $latest = [ordered]@{
-              version   = $version
-              notes     = $notes
-              pub_date  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-              platforms = [ordered]@{
-                'windows-x86_64'      = $entry
-                'windows-x86_64-nsis' = $entry
-              }
-            }
+            $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding utf8NoBOM
+
             $latestPath = Join-Path $installer.DirectoryName 'latest.json'
-            $latest | ConvertTo-Json -Depth 6 | Set-Content -Path $latestPath -Encoding utf8NoBOM
+            node .github/scripts/create-updater-json.mjs $manifestPath $nsisDir $env:GITHUB_REPOSITORY $env:RELEASE_TAG $version $latestPath
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to generate latest.json.' }
             $uploadFiles += $latestPath
           }
 

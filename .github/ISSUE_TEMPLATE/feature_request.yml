@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest an improvement or provider addition
+description: Suggest an improvement or provider addition for OpenQuota (Windows)
 title: '[Feature]: '
 labels:
   - enhancement
@@ -33,20 +33,6 @@ body:
     attributes:
       label: Provider
       description: If this concerns a provider, enter its name and link to its official usage or quota documentation.
-
-  - type: dropdown
-    id: platforms
-    attributes:
-      label: Platforms
-      description: Which platforms should this apply to?
-      options:
-        - All supported platforms
-        - Windows
-        - macOS
-        - Linux
-        - Not platform-specific
-    validations:
-      required: true
 
   - type: textarea
     id: alternatives

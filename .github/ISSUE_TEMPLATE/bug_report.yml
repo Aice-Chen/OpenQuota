@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem in OpenQuota
+description: Report a reproducible problem in OpenQuota (Windows)
 title: '[Bug]: '
 labels:
   - bug
@@ -19,23 +19,12 @@ body:
         - label: I reproduced the problem with the latest OpenQuota release.
           required: true
 
-  - type: dropdown
-    id: operating-system
-    attributes:
-      label: Operating system
-      options:
-        - Windows
-        - macOS
-        - Linux
-    validations:
-      required: true
-
   - type: input
     id: system-details
     attributes:
-      label: System details
-      description: Include the OS version, architecture, and desktop environment or display server when relevant.
-      placeholder: Fedora 44, KDE Plasma, Wayland, x64
+      label: Windows version
+      description: Include your Windows edition, build version, and architecture.
+      placeholder: Windows 11 24H2, x64
     validations:
       required: true
 
@@ -44,15 +33,6 @@ body:
     attributes:
       label: OpenQuota version or commit
       placeholder: Version shown in the footer or a commit SHA
-    validations:
-      required: true
-
-  - type: input
-    id: installation
-    attributes:
-      label: Installation method
-      description: Enter the package type or how OpenQuota was installed.
-      placeholder: AppImage, .deb, Windows installer, macOS DMG, or source build
     validations:
       required: true
 
@@ -72,6 +52,8 @@ body:
         - OpenCode
         - OpenRouter
         - Z.ai
+        - Kimi
+        - MiniMax
         - Multiple providers
     validations:
       required: true

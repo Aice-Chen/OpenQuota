@@ -7,50 +7,23 @@ const signedArtifacts = [
     label: 'Windows x64 NSIS installer',
     pattern: /_x64-setup\.exe$/i,
     platforms: ['windows-x86_64', 'windows-x86_64-nsis'],
+    required: true,
   },
   {
     label: 'Windows ARM64 NSIS installer',
     pattern: /_arm64-setup\.exe$/i,
     platforms: ['windows-aarch64', 'windows-aarch64-nsis'],
-  },
-  {
-    label: 'Linux x64 AppImage',
-    pattern: /_amd64\.AppImage$/i,
-    platforms: ['linux-x86_64', 'linux-x86_64-appimage'],
-  },
-  {
-    label: 'Linux ARM64 AppImage',
-    pattern: /_(?:arm64|aarch64)\.AppImage$/i,
-    platforms: ['linux-aarch64', 'linux-aarch64-appimage'],
-  },
-  {
-    label: 'Linux x64 Debian package',
-    pattern: /_amd64\.deb$/i,
-    platforms: ['linux-x86_64-deb'],
-  },
-  {
-    label: 'Linux ARM64 Debian package',
-    pattern: /_arm64\.deb$/i,
-    platforms: ['linux-aarch64-deb'],
-  },
-  {
-    label: 'macOS Universal app archive',
-    pattern: /_universal\.app\.tar\.gz$/i,
-    platforms: [
-      'darwin-aarch64',
-      'darwin-x86_64',
-      'darwin-universal',
-      'darwin-aarch64-app',
-      'darwin-x86_64-app',
-      'darwin-universal-app',
-    ],
+    required: false,
   },
 ];
 
-const distributablePattern = /(-setup\.exe|\.AppImage|\.deb|\.app\.tar\.gz|\.dmg)$/i;
+const distributablePattern = /-setup\.exe$/i;
 
-function findExactlyOne(assets, pattern, label) {
+function findSingle(assets, pattern, label, required) {
   const matches = assets.filter((asset) => pattern.test(asset.name));
+  if (matches.length === 0 && !required) {
+    return null;
+  }
   if (matches.length !== 1) {
     throw new Error(`Expected one ${label}, found ${matches.length}.`);
   }
@@ -72,7 +45,10 @@ export function createUpdaterMetadata(release, signatures, repository, tag, vers
   const prefix = `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/`;
 
   for (const definition of signedArtifacts) {
-    const asset = findExactlyOne(assets, definition.pattern, definition.label);
+    const asset = findSingle(assets, definition.pattern, definition.label, definition.required);
+    if (!asset) {
+      continue;
+    }
     if (!asset.name.includes(`_${version}_`)) {
       throw new Error(
         `${definition.label} does not match release version ${version}: ${asset.name}`,
@@ -97,12 +73,6 @@ export function createUpdaterMetadata(release, signatures, repository, tag, vers
     }
     recognized.add(asset.name);
   }
-
-  const dmg = findExactlyOne(assets, /_universal\.dmg$/i, 'macOS Universal DMG');
-  if (!dmg.name.includes(`_${version}_`)) {
-    throw new Error(`macOS Universal DMG does not match release version ${version}: ${dmg.name}`);
-  }
-  recognized.add(dmg.name);
 
   const unexpected = assets
     .filter((asset) => distributablePattern.test(asset.name) && !recognized.has(asset.name))
