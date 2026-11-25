@@ -124,9 +124,8 @@ jobs:
             $exists = $false
           }
 
-          if ($exists) {
-            gh release upload $env:RELEASE_TAG @uploadFiles --repo $env:GITHUB_REPOSITORY --clobber
-            gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --latest --title "OpenQuota $env:RELEASE_TAG" --notes $notes
-          } else {
-            gh release create $env:RELEASE_TAG @uploadFiles --repo $env:GITHUB_REPOSITORY --latest --title "OpenQuota $env:RELEASE_TAG" --notes $notes
+          if (-not $exists) {
+            gh release create $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --draft --title "OpenQuota $env:RELEASE_TAG" --notes $notes
           }
+          gh release upload $env:RELEASE_TAG @uploadFiles --repo $env:GITHUB_REPOSITORY --clobber
+          gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --draft=false --latest --title "OpenQuota $env:RELEASE_TAG" --notes $notes
