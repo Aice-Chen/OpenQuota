@@ -37,10 +37,7 @@ pub fn spawn(
                 finish_refresh(&app, &state, &settings, &notifications);
             }
             let interval = settings.refresh_interval();
-            tokio::select! {
-                () = tokio::time::sleep(interval) => {}
-                () = settings.wait_refresh_interval_changed() => {}
-            }
+            let _ = tokio::time::timeout(interval, settings.wait_refresh_interval_changed()).await;
         }
     });
 }

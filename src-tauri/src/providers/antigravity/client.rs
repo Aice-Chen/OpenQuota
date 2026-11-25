@@ -236,9 +236,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{
-        rules::AntigravityRules, AntigravityClient, CloudOutcome, CloudUserAgent, RefreshOutcome,
-    };
+    use super::{AntigravityClient, AntigravityRules, CloudOutcome, CloudUserAgent, RefreshOutcome};
     use crate::providers::test_http;
 
     fn client(base: &str) -> AntigravityClient {
