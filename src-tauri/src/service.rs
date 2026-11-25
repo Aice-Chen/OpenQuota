@@ -1178,7 +1178,7 @@ mod tests {
         assert!(validate_snapshot(&registry, "flex", snapshot.clone()).is_ok());
 
         let mut blank_label = snapshot;
-        blank_label.quotas[1].label = "   ".into();
+        blank_label.quotas[0].label = "   ".into();
         assert!(validate_snapshot(&registry, "flex", blank_label).is_err());
     }
 
