@@ -33,6 +33,7 @@ pub(crate) fn definition() -> ProviderDefinition {
         display_name: "OpenCode".into(),
         short_name: "OC".into(),
         fallback_enabled: false,
+        dynamic_quotas: false,
         local_usage_source_note: Some(USAGE_SOURCE_NOTE.into()),
         links: vec![ProviderLink::new("Dashboard", "https://opencode.ai/auth")],
         metrics: vec![

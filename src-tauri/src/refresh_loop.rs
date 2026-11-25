@@ -4,8 +4,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{
     commands::settings::emit_settings_if_account_changed, notifications::finish_refresh,
-    pacing::NotificationEvaluator, policy::REFRESH_INTERVAL, service::ProviderService,
-    settings::SettingsService,
+    pacing::NotificationEvaluator, service::ProviderService, settings::SettingsService,
 };
 
 pub fn spawn(
@@ -37,7 +36,11 @@ pub fn spawn(
                 let _ = app.emit("usage-state", &state);
                 finish_refresh(&app, &state, &settings, &notifications);
             }
-            tokio::time::sleep(REFRESH_INTERVAL).await;
+            let interval = settings.refresh_interval();
+            tokio::select! {
+                () = tokio::time::sleep(interval) => {}
+                () = settings.wait_refresh_interval_changed() => {}
+            }
         }
     });
 }

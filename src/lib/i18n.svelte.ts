@@ -82,6 +82,7 @@ const BACKEND_MESSAGES_ZH: Record<string, string> = {
   'OpenQuota settings could not be saved.': '无法保存 OpenQuota 设置。',
   'OpenQuota settings are temporarily unavailable.': 'OpenQuota 设置暂时不可用。',
   'OpenQuota window is unavailable.': 'OpenQuota 窗口当前不可用。',
+  'Update source must be a valid HTTPS URL.': '更新源必须是有效的 HTTPS 地址。',
 };
 
 const BACKEND_PATTERNS_ZH: Array<[RegExp, (...groups: string[]) => string]> = [
@@ -170,6 +171,7 @@ const KNOWN_UPDATE_ERROR_CODES = new Set([
   'rate_limited',
   'signature_invalid',
   'network',
+  'invalid_endpoint',
   'update_failed',
 ]);
 

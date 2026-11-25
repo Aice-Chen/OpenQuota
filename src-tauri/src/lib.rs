@@ -445,6 +445,12 @@ pub fn run() {
                 if window::apply_panel_surface(&window, settings.get().theme).is_err() {
                     app_warn!("window", "initial panel surface theme could not be applied");
                 }
+                let initial_width = settings.get().panel_width;
+                if initial_width != settings::DEFAULT_PANEL_WIDTH
+                    && window::apply_panel_width(&window, initial_width).is_err()
+                {
+                    app_warn!("window", "initial panel width could not be applied");
+                }
                 if !floating_window {
                     webview_memory::set_inactive(&window, true);
                 }

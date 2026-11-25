@@ -34,6 +34,7 @@ pub(crate) fn definition() -> ProviderDefinition {
         display_name: "Grok".into(),
         short_name: "G".into(),
         fallback_enabled: false,
+        dynamic_quotas: false,
         local_usage_source_note: Some("From your Grok logs (estimated)".into()),
         links: vec![ProviderLink::new("Usage", "https://grok.com/?_s=usage")],
         metrics: vec![

@@ -2,13 +2,9 @@ use reqwest::{blocking::Client, StatusCode};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{discovery::LanguageServer, AntigravityError};
+use super::{discovery::LanguageServer, rules::AntigravityRules, AntigravityError};
 
 const SERVICE: &str = "exa.language_server_pb.LanguageServerService";
-const CLOUD_BASES: [&str; 2] = [
-    "https://daily-cloudcode-pa.googleapis.com",
-    "https://cloudcode-pa.googleapis.com",
-];
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_CLIENT_ID: &str =
     "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
@@ -22,6 +18,7 @@ pub struct AntigravityClient {
     remote: Client,
     cloud_bases: Vec<String>,
     google_token_url: String,
+    hub_user_agent: String,
 }
 
 pub enum CloudOutcome {
@@ -34,35 +31,6 @@ pub enum CloudOutcome {
 pub enum CloudUserAgent {
     Antigravity,
     Agy,
-}
-
-impl CloudUserAgent {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Antigravity => hub_user_agent(),
-            Self::Agy => "agy",
-        }
-    }
-}
-
-const fn hub_user_agent() -> &'static str {
-    if cfg!(target_os = "windows") {
-        if cfg!(target_arch = "aarch64") {
-            "antigravity/hub/2.9.1 windows/arm64"
-        } else {
-            "antigravity/hub/2.9.1 windows/amd64"
-        }
-    } else if cfg!(target_os = "macos") {
-        if cfg!(target_arch = "aarch64") {
-            "antigravity/hub/2.9.1 darwin/arm64"
-        } else {
-            "antigravity/hub/2.9.1 darwin/amd64"
-        }
-    } else if cfg!(target_arch = "aarch64") {
-        "antigravity/hub/2.9.1 linux/arm64"
-    } else {
-        "antigravity/hub/2.9.1 linux/amd64"
-    }
 }
 
 pub enum RefreshOutcome {
@@ -81,13 +49,11 @@ struct GoogleTokenResponse {
 }
 
 impl AntigravityClient {
-    pub fn new() -> Result<Self, AntigravityError> {
+    pub fn with_rules(rules: &AntigravityRules) -> Result<Self, AntigravityError> {
         Self::with_endpoints(
-            CLOUD_BASES
-                .iter()
-                .map(|value| (*value).to_owned())
-                .collect(),
+            rules.cloud_bases.clone(),
             GOOGLE_TOKEN_URL.to_owned(),
+            rules.hub_user_agent(),
             std::time::Duration::from_secs(15),
         )
     }
@@ -95,6 +61,7 @@ impl AntigravityClient {
     fn with_endpoints(
         cloud_bases: Vec<String>,
         google_token_url: String,
+        hub_user_agent: String,
         remote_timeout: std::time::Duration,
     ) -> Result<Self, AntigravityError> {
         Ok(Self {
@@ -109,6 +76,7 @@ impl AntigravityClient {
                 .map_err(|_| AntigravityError::Unavailable)?,
             cloud_bases,
             google_token_url,
+            hub_user_agent,
         })
     }
 
@@ -170,13 +138,17 @@ impl AntigravityClient {
         body: Value,
         user_agent: CloudUserAgent,
     ) -> CloudOutcome {
+        let ua = match user_agent {
+            CloudUserAgent::Antigravity => self.hub_user_agent.as_str(),
+            CloudUserAgent::Agy => "agy",
+        };
         for base in &self.cloud_bases {
             let response = self
                 .remote
                 .post(format!("{base}{path}"))
                 .bearer_auth(token)
                 .header("Accept", "application/json")
-                .header("User-Agent", user_agent.as_str())
+                .header("User-Agent", ua)
                 .json(&body)
                 .send();
             let Ok(response) = response else {
@@ -264,13 +236,16 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{AntigravityClient, CloudOutcome, CloudUserAgent, RefreshOutcome};
+    use super::{
+        rules::AntigravityRules, AntigravityClient, CloudOutcome, CloudUserAgent, RefreshOutcome,
+    };
     use crate::providers::test_http;
 
     fn client(base: &str) -> AntigravityClient {
         AntigravityClient::with_endpoints(
             vec![base.to_owned()],
             format!("{base}/token"),
+            AntigravityRules::bundled().hub_user_agent(),
             Duration::from_secs(1),
         )
         .unwrap()
@@ -354,6 +329,7 @@ mod tests {
         let timeout_client = AntigravityClient::with_endpoints(
             vec![timeout.clone()],
             format!("{timeout}/token"),
+            AntigravityRules::bundled().hub_user_agent(),
             test_http::TIMEOUT_TEST_CLIENT_LIMIT,
         )
         .unwrap();

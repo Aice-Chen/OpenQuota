@@ -2,6 +2,7 @@ mod auth;
 mod client;
 mod discovery;
 mod mapper;
+mod rules;
 
 use std::path::PathBuf;
 
@@ -18,9 +19,11 @@ use self::{
     client::{AntigravityClient, CloudOutcome, CloudUserAgent, RefreshOutcome},
     discovery::discover,
     mapper::{
-        build_legacy_quotas, merge_missing_quotas, parse_cloud_models, parse_command_model_configs,
-        parse_plan, parse_quota_buckets, parse_quota_summary, parse_user_status,
+        build_legacy_quotas_with_rules, merge_missing_quotas, parse_cloud_models,
+        parse_command_model_configs, parse_plan, parse_quota_buckets,
+        parse_quota_summary_with_rules, parse_user_status,
     },
+    rules::AntigravityRules,
 };
 
 const QUOTA_SUMMARY_PATH: &str = "/v1internal:retrieveUserQuotaSummary";
@@ -34,6 +37,7 @@ pub(crate) fn definition() -> ProviderDefinition {
         display_name: "Antigravity".into(),
         short_name: "A".into(),
         fallback_enabled: false,
+        dynamic_quotas: true,
         local_usage_source_note: None,
         links: vec![],
         metrics: vec![
@@ -98,13 +102,17 @@ pub enum AntigravityError {
 pub struct AntigravityProvider {
     client: AntigravityClient,
     access_token_cache: AccessTokenCache,
+    rules: AntigravityRules,
 }
 
 impl AntigravityProvider {
     pub fn new(cache_path: PathBuf) -> Result<Self, AntigravityError> {
+        let rules_path = cache_path.parent().map(|dir| dir.join("rules.json"));
+        let rules = AntigravityRules::load(rules_path.as_deref());
         Ok(Self {
-            client: AntigravityClient::new()?,
+            client: AntigravityClient::with_rules(&rules)?,
             access_token_cache: AccessTokenCache::new(cache_path),
+            rules,
         })
     }
 
@@ -114,14 +122,17 @@ impl AntigravityProvider {
                 .client
                 .call_language_server(&server, "RetrieveUserQuotaSummary")
                 .as_ref()
-                .and_then(parse_quota_summary);
+                .and_then(|value| parse_quota_summary_with_rules(value, &self.rules));
 
             if let Some(mut quotas) = summary_quotas {
                 let status = self.client.call_language_server(&server, "GetUserStatus");
                 let plan = status.as_ref().and_then(parse_plan);
                 if !has_gemini_session(&quotas) {
                     if let Some((_, configs)) = status.as_ref().and_then(parse_user_status) {
-                        quotas = merge_missing_quotas(quotas, build_legacy_quotas(configs));
+                        quotas = merge_missing_quotas(
+                            quotas,
+                            build_legacy_quotas_with_rules(configs, &self.rules),
+                        );
                     }
                     if !has_gemini_session(&quotas) {
                         if let Some(configs) = self
@@ -130,7 +141,10 @@ impl AntigravityProvider {
                             .as_ref()
                             .and_then(parse_command_model_configs)
                         {
-                            quotas = merge_missing_quotas(quotas, build_legacy_quotas(configs));
+                            quotas = merge_missing_quotas(
+                                quotas,
+                                build_legacy_quotas_with_rules(configs, &self.rules),
+                            );
                         }
                     }
                 }
@@ -139,7 +153,7 @@ impl AntigravityProvider {
 
             if let Some(status) = self.client.call_language_server(&server, "GetUserStatus") {
                 if let Some((plan, configs)) = parse_user_status(&status) {
-                    let quotas = build_legacy_quotas(configs);
+                    let quotas = build_legacy_quotas_with_rules(configs, &self.rules);
                     if !quotas.is_empty() {
                         return Ok(snapshot(plan, quotas));
                     }
@@ -150,7 +164,7 @@ impl AntigravityProvider {
                     .as_ref()
                     .and_then(parse_command_model_configs)
                 {
-                    let quotas = build_legacy_quotas(configs);
+                    let quotas = build_legacy_quotas_with_rules(configs, &self.rules);
                     if !quotas.is_empty() {
                         return Ok(snapshot(None, quotas));
                     }
@@ -236,7 +250,7 @@ impl AntigravityProvider {
             CloudUserAgent::Antigravity,
         ) {
             CloudOutcome::Ok(value) => {
-                if let Some(quotas) = parse_quota_summary(&value) {
+                if let Some(quotas) = parse_quota_summary_with_rules(&value, &self.rules) {
                     if has_gemini_session(&quotas) {
                         return Ok(snapshot(plan, quotas));
                     }
@@ -254,7 +268,8 @@ impl AntigravityProvider {
             CloudUserAgent::Antigravity,
         ) {
             CloudOutcome::Ok(value) => {
-                let fallback = build_legacy_quotas(parse_cloud_models(&value));
+                let fallback =
+                    build_legacy_quotas_with_rules(parse_cloud_models(&value), &self.rules);
                 if !fallback.is_empty() {
                     let merged = match summary_quotas {
                         Some(primary) => merge_missing_quotas(primary, fallback),
@@ -270,7 +285,8 @@ impl AntigravityProvider {
         match self.cloud_code_with_project(RETRIEVE_QUOTA_PATH, token, project, CloudUserAgent::Agy)
         {
             CloudOutcome::Ok(value) => {
-                let fallback = build_legacy_quotas(parse_quota_buckets(&value));
+                let fallback =
+                    build_legacy_quotas_with_rules(parse_quota_buckets(&value), &self.rules);
                 if !fallback.is_empty() {
                     let merged = match summary_quotas {
                         Some(primary) => merge_missing_quotas(primary, fallback),

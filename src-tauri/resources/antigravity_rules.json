@@ -1,0 +1,23 @@
+{
+  "hubVersion": "2.9.1",
+  "cloudBases": [
+    "https://daily-cloudcode-pa.googleapis.com",
+    "https://cloudcode-pa.googleapis.com"
+  ],
+  "modelBlacklist": [
+    "MODEL_CHAT_20706",
+    "MODEL_CHAT_23310",
+    "MODEL_GOOGLE_GEMINI_2_5_FLASH",
+    "MODEL_GOOGLE_GEMINI_2_5_FLASH_THINKING",
+    "MODEL_GOOGLE_GEMINI_2_5_FLASH_LITE",
+    "MODEL_GOOGLE_GEMINI_2_5_PRO",
+    "MODEL_PLACEHOLDER_M19",
+    "MODEL_PLACEHOLDER_M9",
+    "MODEL_PLACEHOLDER_M12"
+  ],
+  "sessionAliases": ["5h", "5hr", "5-hour", "five-hour", "five hour", "session"],
+  "weeklyAliases": ["weekly", "week", "7d", "7-day", "7-days"],
+  "dailyAliases": ["daily", "day", "24h", "24hr", "1d"],
+  "geminiKeywords": ["gemini"],
+  "claudeKeywords": ["3p", "third-party", "claude", "gpt"]
+}

@@ -15,6 +15,7 @@
     translateUpdateFailure,
   } from './i18n.svelte';
   import MetricRenderer from './MetricRenderer.svelte';
+  import QuotaMetric from './QuotaMetric.svelte';
   import TotalSpend from './TotalSpend.svelte';
   import type { SpendProjection } from './totalSpend';
   import type { ProviderCatalogIndex } from './metrics';
@@ -126,17 +127,32 @@
   const dashboardProviders = $derived(
     enabledProviders.map((provider) => {
       const state = viewState.providers[provider.id];
+      const snapshot = state?.snapshot ?? emptyProviderSnapshot(provider.id);
+      const definition = catalog.provider(provider.id);
+      const staticQuotaIds = new Set(
+        (definition?.metrics ?? [])
+          .map((metric) =>
+            metric.source.kind === 'quota' || metric.source.kind === 'quotaOrValue'
+              ? metric.source.sourceId
+              : null,
+          )
+          .filter((sourceId): sourceId is string => sourceId !== null),
+      );
+      const dynamicQuotas = definition?.dynamicQuotas
+        ? snapshot.quotas.filter((quota) => !staticQuotaIds.has(quota.id))
+        : [];
       return {
         provider,
         state,
-        snapshot: state?.snapshot ?? emptyProviderSnapshot(provider.id),
+        snapshot,
         alwaysMetrics: provider.metrics.filter(
           (metric) => metric.enabled && metric.section === 'alwaysVisible',
         ),
+        dynamicQuotas,
         demandMetrics: provider.metrics.filter(
           (metric) => metric.enabled && metric.section === 'onDemand',
         ),
-        links: catalog.provider(provider.id)?.links ?? [],
+        links: definition?.links ?? [],
       };
     }),
   );
@@ -428,7 +444,7 @@
   />
 {/if}
 
-{#each dashboardProviders as { provider, state, snapshot, alwaysMetrics, demandMetrics, links } (provider.id)}
+{#each dashboardProviders as { provider, state, snapshot, alwaysMetrics, dynamicQuotas, demandMetrics, links } (provider.id)}
   <div
     class="provider-reorder-shell"
     class:provider-reorder-shell--content-morph={demandMorphing}
@@ -588,6 +604,27 @@
               {onSettingsChange}
             />
           </div>
+        {/each}
+        {#each dynamicQuotas as quota (quota.id)}
+          <QuotaMetric
+            {quota}
+            {now}
+            usageDisplay={settings.usageDisplay}
+            resetDisplay={settings.resetDisplay}
+            timeFormat={settings.timeFormat}
+            alwaysShowPacing={settings.alwaysShowPacing}
+            isSessionWindow={quota.periodSeconds <= 5 * 3600}
+            onToggleUsage={() =>
+              onSettingsChange({
+                ...settings,
+                usageDisplay: settings.usageDisplay === 'used' ? 'left' : 'used',
+              })}
+            onToggleReset={() =>
+              onSettingsChange({
+                ...settings,
+                resetDisplay: settings.resetDisplay === 'countdown' ? 'exact' : 'countdown',
+              })}
+          />
         {/each}
         {#if demandMetrics.length > 0 || links.length > 0}
           <button

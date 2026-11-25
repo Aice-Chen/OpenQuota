@@ -205,6 +205,23 @@ export function buildProviderShareRows(
     });
     previousTextSection = metric.section;
   }
+  const providerDefinition = catalog.provider(layout.id);
+  if (providerDefinition?.dynamicQuotas) {
+    const staticQuotaIds = new Set(
+      providerDefinition.metrics
+        .map((metric) =>
+          metric.source.kind === 'quota' || metric.source.kind === 'quotaOrValue'
+            ? metric.source.sourceId
+            : null,
+        )
+        .filter((sourceId): sourceId is string => sourceId !== null),
+    );
+    for (const quota of snapshot.quotas) {
+      if (!staticQuotaIds.has(quota.id)) {
+        rows.push(quotaShareRow(quota, settings, now));
+      }
+    }
+  }
   return rows;
 }
 

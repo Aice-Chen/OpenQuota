@@ -490,12 +490,20 @@ impl ProviderService {
         self.provider_state(provider_id)
     }
 
+    fn refresh_interval(&self) -> Duration {
+        self.settings
+            .as_ref()
+            .map(|settings| settings.refresh_interval())
+            .unwrap_or(REFRESH_INTERVAL)
+    }
+
     fn is_fresh_this_session(&self, provider_id: &str) -> bool {
+        let interval = self.refresh_interval();
         self.last_live_refresh
             .lock()
             .ok()
             .and_then(|value| value.get(provider_id).copied())
-            .is_some_and(|instant| instant.elapsed() < REFRESH_INTERVAL)
+            .is_some_and(|instant| instant.elapsed() < interval)
     }
 
     fn is_in_failure_backoff(&self, provider_id: &str) -> bool {
@@ -587,10 +595,14 @@ fn validate_snapshot(
             _ => None,
         })
         .collect::<std::collections::HashSet<_>>();
-    if snapshot
-        .quotas
-        .iter()
-        .any(|quota| !quota_sources.contains(quota.id.as_str()))
+    let has_invalid_quota = snapshot.quotas.iter().any(|quota| {
+        if definition.dynamic_quotas {
+            quota.id.trim().is_empty() || quota.label.trim().is_empty()
+        } else {
+            !quota_sources.contains(quota.id.as_str())
+        }
+    });
+    if has_invalid_quota
         || snapshot
             .value_metrics
             .iter()
@@ -869,6 +881,7 @@ mod tests {
             display_name: id.into(),
             short_name: "T".into(),
             fallback_enabled: true,
+            dynamic_quotas: false,
             local_usage_source_note: None,
             links: vec![],
             metrics: vec![MetricDefinition::new(
@@ -1074,6 +1087,7 @@ mod tests {
             display_name: "Dynamic".into(),
             short_name: "D".into(),
             fallback_enabled: true,
+            dynamic_quotas: false,
             local_usage_source_note: None,
             links: Vec::new(),
             metrics: vec![
@@ -1140,6 +1154,32 @@ mod tests {
         let mut unknown_status = snapshot;
         unknown_status.status_metrics[0].id = "unknown".into();
         assert!(validate_snapshot(&registry, "dynamic", unknown_status).is_err());
+    }
+
+    #[test]
+    fn snapshot_contract_allows_dynamic_quotas_when_enabled() {
+        let mut definition = test_definition("flex");
+        definition.dynamic_quotas = true;
+        let registry = ProviderRegistry::from_definitions(vec![definition]).unwrap();
+        let mut snapshot = test_snapshot("flex");
+        snapshot.quotas.push(QuotaWindow {
+            id: "dyn:veo-5h".into(),
+            label: "Veo 5h".into(),
+            used_percent: 40.0,
+            resets_at: None,
+            period_seconds: 18_000,
+            format: QuotaFormat::Percent,
+            used_value: None,
+            limit_value: None,
+            unit: None,
+            estimated: false,
+            source_note: None,
+        });
+        assert!(validate_snapshot(&registry, "flex", snapshot.clone()).is_ok());
+
+        let mut blank_label = snapshot;
+        blank_label.quotas[1].label = "   ".into();
+        assert!(validate_snapshot(&registry, "flex", blank_label).is_err());
     }
 
     #[test]

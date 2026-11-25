@@ -165,6 +165,13 @@ async fn save_app_settings_inner(
             }
         }
     }
+    if previous.panel_width != updated.panel_width {
+        if let Some(window) = app.get_webview_window(crate::window::MAIN_WINDOW) {
+            if crate::window::apply_panel_width(&window, updated.panel_width).is_err() {
+                crate::app_warn!("window", "panel width could not be applied");
+            }
+        }
+    }
     if previous.language != updated.language {
         crate::update_tray_menu(&app, updated.language);
     }

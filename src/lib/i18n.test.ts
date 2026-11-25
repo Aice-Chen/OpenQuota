@@ -135,6 +135,14 @@ describe('i18n localization', () => {
     });
     expect(failure.message).toBe('下载的更新包未通过安全签名校验。');
     expect(failure.action).toContain('请勿安装该文件');
+    expect(
+      translateUpdateFailure({
+        code: 'invalid_endpoint',
+        message: 'The custom update source must be a valid HTTPS URL.',
+        action: 'Check settings.',
+        retryable: false,
+      }).message,
+    ).toBe('自定义更新源必须是有效的 HTTPS 地址。');
 
     i18n.setPreference('en');
     expect(

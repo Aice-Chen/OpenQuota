@@ -27,6 +27,7 @@ pub(crate) fn definition() -> ProviderDefinition {
         display_name: "Z.ai".into(),
         short_name: "Z".into(),
         fallback_enabled: false,
+        dynamic_quotas: false,
         local_usage_source_note: None,
         links: vec![
             ProviderLink::new(

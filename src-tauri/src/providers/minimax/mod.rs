@@ -27,6 +27,7 @@ pub(crate) fn definition() -> ProviderDefinition {
         display_name: "MiniMax".into(),
         short_name: "M".into(),
         fallback_enabled: false,
+        dynamic_quotas: false,
         local_usage_source_note: None,
         links: vec![
             ProviderLink::new("Dashboard", "https://platform.minimax.io/console/plan"),

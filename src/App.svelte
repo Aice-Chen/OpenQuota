@@ -129,6 +129,7 @@
     if (settingsState.settings.theme === 'system') delete root.dataset.theme;
     else root.dataset.theme = settingsState.settings.theme;
     root.dataset.density = settingsState.settings.density;
+    root.style.setProperty('--panel-width', `${settingsState.settings.panelWidth ?? 320}px`);
   });
 
   $effect(() => {
@@ -199,9 +200,11 @@
   function saveSettings(next: AppSettings) {
     settingsError = null;
     const windowModeChanged = settingsState?.settings.windowMode !== next.windowMode;
-    if (windowModeChanged) beginContentMorph();
+    const panelWidthChanged = settingsState?.settings.panelWidth !== next.panelWidth;
+    if (windowModeChanged || panelWidthChanged) beginContentMorph();
     const save = settingsController.save(next);
     if (windowModeChanged) void save.finally(updatePanelResizeEdge);
+    if (panelWidthChanged) void save.finally(scheduleWindowFit);
   }
 
   function toggleFloatingWindow() {
@@ -947,7 +950,13 @@
           aria-label={t('app.refreshAllUsage')}
         >
           <span>OpenQuota {appVersion}</span><small
-            >{anyRefreshing ? t('app.updating') : nextUpdateLabel(lastFullRefresh, now)}</small
+            >{anyRefreshing
+              ? t('app.updating')
+              : nextUpdateLabel(
+                  lastFullRefresh,
+                  now,
+                  settingsState.settings.refreshIntervalSeconds,
+                )}</small
           >
         </button>
         {#if screen === 'dashboard'}

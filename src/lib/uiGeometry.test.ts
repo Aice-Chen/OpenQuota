@@ -27,7 +27,7 @@ describe('popover geometry contract', () => {
       width: 320,
       height: 800,
       minWidth: 320,
-      maxWidth: 320,
+      maxWidth: 520,
       minHeight: 240,
       resizable: false,
     });
@@ -37,7 +37,7 @@ describe('popover geometry contract', () => {
 
   it('lets the webview shrink below its nominal width without creating horizontal focus scroll', () => {
     expect(componentCss).toMatch(
-      /html,\s*body,\s*#app,\s*\.popover\s*{[^}]*width: 100%;[^}]*min-width: 0;[^}]*max-width: 320px;/s,
+      /html,\s*body,\s*#app,\s*\.popover\s*{[^}]*width: 100%;[^}]*min-width: 0;[^}]*max-width: var\(--panel-width, 320px\);/s,
     );
     expect(css).not.toMatch(/\.popover\s*{[^}]*\n\s*width: 320px;/s);
   });

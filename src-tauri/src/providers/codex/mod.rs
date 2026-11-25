@@ -31,6 +31,7 @@ pub(crate) fn definition() -> ProviderDefinition {
         display_name: "Codex".into(),
         short_name: "Cx".into(),
         fallback_enabled: true,
+        dynamic_quotas: false,
         local_usage_source_note: Some("From your Codex logs (estimated)".into()),
         links: vec![
             ProviderLink::new("Status", "https://status.openai.com/"),

@@ -1,21 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::models::{QuotaFormat, QuotaWindow};
 
-const MODEL_BLACKLIST: [&str; 9] = [
-    "MODEL_CHAT_20706",
-    "MODEL_CHAT_23310",
-    "MODEL_GOOGLE_GEMINI_2_5_FLASH",
-    "MODEL_GOOGLE_GEMINI_2_5_FLASH_THINKING",
-    "MODEL_GOOGLE_GEMINI_2_5_FLASH_LITE",
-    "MODEL_GOOGLE_GEMINI_2_5_PRO",
-    "MODEL_PLACEHOLDER_M19",
-    "MODEL_PLACEHOLDER_M9",
-    "MODEL_PLACEHOLDER_M12",
-];
+use super::rules::AntigravityRules;
 
 #[derive(Debug)]
 pub struct ModelConfig {
@@ -70,7 +60,18 @@ enum PoolFamily {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QuotaCadence {
     Session,
+    Daily,
     Weekly,
+}
+
+impl QuotaCadence {
+    const fn period_seconds(self) -> u64 {
+        match self {
+            Self::Session => 5 * 60 * 60,
+            Self::Daily => 24 * 60 * 60,
+            Self::Weekly => 7 * 24 * 60 * 60,
+        }
+    }
 }
 
 struct BestBucket {
@@ -79,16 +80,24 @@ struct BestBucket {
     resets_at: Option<DateTime<Utc>>,
 }
 
-const SESSION_ALIASES: [&str; 6] = ["5h", "5hr", "5-hour", "five-hour", "five hour", "session"];
-const WEEKLY_ALIASES: [&str; 5] = ["weekly", "week", "7d", "7-day", "7-days"];
-
+#[cfg(test)]
 pub fn parse_quota_summary(value: &Value) -> Option<Vec<QuotaWindow>> {
+    parse_quota_summary_with_rules(value, AntigravityRules::bundled())
+}
+
+pub fn parse_quota_summary_with_rules(
+    value: &Value,
+    rules: &AntigravityRules,
+) -> Option<Vec<QuotaWindow>> {
     let groups = value
         .pointer("/response/groups")
         .or_else(|| value.pointer("/summary/groups"))
         .or_else(|| value.get("groups"))?
         .as_array()?;
     let mut found: HashMap<QuotaSlot, BestBucket> = HashMap::new();
+    let mut dynamic_quotas: Vec<QuotaWindow> = Vec::new();
+    let mut dynamic_ids: HashSet<String> = HashSet::new();
+
     for group in groups {
         let group_title = group
             .get("displayName")
@@ -102,9 +111,6 @@ pub fn parse_quota_summary(value: &Value) -> Option<Vec<QuotaWindow>> {
             if bucket.get("disabled").and_then(Value::as_bool) == Some(true) {
                 continue;
             }
-            let Some((slot, priority)) = classify_summary_bucket(bucket, group_title) else {
-                continue;
-            };
             let Some(fraction) = extract_remaining_fraction(bucket) else {
                 continue;
             };
@@ -113,20 +119,30 @@ pub fn parse_quota_summary(value: &Value) -> Option<Vec<QuotaWindow>> {
                 .and_then(Value::as_str)
                 .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
                 .map(|date| date.to_utc());
-            let is_better = |b: &BestBucket| (priority, fraction) < (b.priority, b.remaining);
-            if found.get(&slot).is_none_or(is_better) {
-                found.insert(
-                    slot,
-                    BestBucket {
-                        priority,
-                        remaining: fraction,
-                        resets_at: reset,
-                    },
-                );
+
+            if let Some((slot, priority)) = classify_summary_bucket(bucket, group_title, rules) {
+                let is_better = |b: &BestBucket| (priority, fraction) < (b.priority, b.remaining);
+                if found.get(&slot).is_none_or(is_better) {
+                    found.insert(
+                        slot,
+                        BestBucket {
+                            priority,
+                            remaining: fraction,
+                            resets_at: reset,
+                        },
+                    );
+                }
+            } else if let Some(quota) =
+                build_dynamic_bucket(bucket, group_title, fraction, reset, rules)
+            {
+                if dynamic_ids.insert(quota.id.clone()) {
+                    dynamic_quotas.push(quota);
+                }
             }
         }
     }
-    let quotas: Vec<QuotaWindow> = QuotaSlot::ALL
+
+    let mut quotas: Vec<QuotaWindow> = QuotaSlot::ALL
         .into_iter()
         .filter_map(|slot| {
             let best = found.get(&slot)?;
@@ -146,6 +162,7 @@ pub fn parse_quota_summary(value: &Value) -> Option<Vec<QuotaWindow>> {
             })
         })
         .collect();
+    quotas.extend(dynamic_quotas);
     (!quotas.is_empty()).then_some(quotas)
 }
 
@@ -170,7 +187,7 @@ pub fn merge_missing_quotas(
     ordered
 }
 
-fn classify_summary_bucket(bucket: &Value, group_title: Option<&str>) -> Option<(QuotaSlot, u8)> {
+fn bucket_fields(bucket: &Value) -> (Option<&str>, Option<&str>, Option<&str>) {
     let bucket_id = bucket
         .get("bucketId")
         .or_else(|| bucket.get("id"))
@@ -185,9 +202,17 @@ fn classify_summary_bucket(bucket: &Value, group_title: Option<&str>) -> Option<
         .get("window")
         .and_then(Value::as_str)
         .and_then(trimmed);
+    (bucket_id, display_name, window)
+}
 
-    let cadence = detect_cadence(window, bucket_id, display_name)?;
-    let family = detect_family(bucket_id, group_title, display_name)?;
+fn classify_summary_bucket(
+    bucket: &Value,
+    group_title: Option<&str>,
+    rules: &AntigravityRules,
+) -> Option<(QuotaSlot, u8)> {
+    let (bucket_id, display_name, window) = bucket_fields(bucket);
+    let cadence = detect_cadence(window, bucket_id, display_name, rules)?;
+    let family = detect_family(bucket_id, group_title, display_name, rules)?;
 
     match (family, cadence) {
         (PoolFamily::Gemini { ordinary }, QuotaCadence::Session) => {
@@ -198,38 +223,122 @@ fn classify_summary_bucket(bucket: &Value, group_title: Option<&str>) -> Option<
         }
         (PoolFamily::Claude, QuotaCadence::Session) => Some((QuotaSlot::ClaudeSession, 0)),
         (PoolFamily::Claude, QuotaCadence::Weekly) => Some((QuotaSlot::ClaudeWeekly, 0)),
+        (_, QuotaCadence::Daily) => None,
     }
+}
+
+fn build_dynamic_bucket(
+    bucket: &Value,
+    group_title: Option<&str>,
+    fraction: f64,
+    resets_at: Option<DateTime<Utc>>,
+    rules: &AntigravityRules,
+) -> Option<QuotaWindow> {
+    let (bucket_id, display_name, window) = bucket_fields(bucket);
+    let cadence = detect_cadence(window, bucket_id, display_name, rules);
+    if display_name.is_none() && group_title.is_none() && cadence.is_none() && resets_at.is_none() {
+        return None;
+    }
+    let label = compose_dynamic_label(group_title, display_name, bucket_id)?;
+    let raw_id = bucket_id.or(display_name).unwrap_or(&label);
+    let slug = slugify(raw_id);
+    if slug.is_empty() {
+        return None;
+    }
+    let period_seconds = cadence
+        .map(QuotaCadence::period_seconds)
+        .unwrap_or(5 * 60 * 60);
+    Some(QuotaWindow {
+        id: format!("dyn:{slug}"),
+        label,
+        used_percent: ((1.0 - fraction.clamp(0.0, 1.0)) * 100.0).round(),
+        resets_at,
+        period_seconds,
+        format: QuotaFormat::Percent,
+        used_value: None,
+        limit_value: None,
+        unit: None,
+        estimated: false,
+        source_note: None,
+    })
+}
+
+fn compose_dynamic_label(
+    group_title: Option<&str>,
+    display_name: Option<&str>,
+    bucket_id: Option<&str>,
+) -> Option<String> {
+    match (group_title, display_name) {
+        (Some(group), Some(name)) => {
+            let group_lower = group.to_ascii_lowercase();
+            let name_lower = name.to_ascii_lowercase();
+            if name_lower.contains(&group_lower) {
+                Some(name.to_owned())
+            } else if group_lower.contains(&name_lower) {
+                Some(group.to_owned())
+            } else {
+                Some(format!("{group} · {name}"))
+            }
+        }
+        (None, Some(name)) => Some(name.to_owned()),
+        (Some(group), None) => Some(group.to_owned()),
+        (None, None) => bucket_id.map(|id| title_case(&id.replace(['-', '_'], " "))),
+    }
+}
+
+fn slugify(raw: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for ch in raw.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash && !slug.is_empty() {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    slug.trim_end_matches('-').to_owned()
 }
 
 fn detect_family(
     bucket_id: Option<&str>,
     group_title: Option<&str>,
     display_name: Option<&str>,
+    rules: &AntigravityRules,
 ) -> Option<PoolFamily> {
     if let Some(id) = bucket_id {
         let normalized = normalize_token(id);
-        if normalized.contains("gemini") {
-            let ordinary = is_ordinary_gemini_bucket_id(&normalized);
+        if rules
+            .gemini_keywords
+            .iter()
+            .any(|keyword| normalized.contains(keyword))
+        {
+            let ordinary = is_ordinary_gemini_bucket_id(&normalized, rules);
             return Some(PoolFamily::Gemini { ordinary });
         }
-        if normalized.contains("3p")
-            || normalized.contains("third-party")
-            || normalized.contains("claude")
-            || normalized.contains("gpt")
+        if rules
+            .claude_keywords
+            .iter()
+            .any(|keyword| normalized.contains(keyword))
         {
             return Some(PoolFamily::Claude);
         }
     }
     for text in [group_title, display_name].into_iter().flatten() {
         let lower = text.to_ascii_lowercase();
-        if lower.contains("gemini") {
+        if rules
+            .gemini_keywords
+            .iter()
+            .any(|keyword| lower.contains(keyword))
+        {
             let ordinary = !lower.chars().any(|ch| ch.is_ascii_digit());
             return Some(PoolFamily::Gemini { ordinary });
         }
-        if lower.contains("claude")
-            || lower.contains("gpt")
-            || lower.contains("3p")
-            || lower.contains("third-party")
+        if rules
+            .claude_keywords
+            .iter()
+            .any(|keyword| lower.contains(keyword))
         {
             return Some(PoolFamily::Claude);
         }
@@ -237,11 +346,12 @@ fn detect_family(
     None
 }
 
-fn is_ordinary_gemini_bucket_id(normalized: &str) -> bool {
+fn is_ordinary_gemini_bucket_id(normalized: &str, rules: &AntigravityRules) -> bool {
     let trimmed = normalized.strip_suffix(" limit").unwrap_or(normalized);
-    SESSION_ALIASES
+    rules
+        .session_aliases
         .iter()
-        .chain(WEEKLY_ALIASES.iter())
+        .chain(rules.weekly_aliases.iter())
         .any(|alias| trimmed == format!("gemini-{alias}"))
         || trimmed == "gemini"
 }
@@ -250,28 +360,32 @@ fn detect_cadence(
     window: Option<&str>,
     bucket_id: Option<&str>,
     display_name: Option<&str>,
+    rules: &AntigravityRules,
 ) -> Option<QuotaCadence> {
     window
-        .and_then(cadence_from_text)
-        .or_else(|| bucket_id.and_then(cadence_from_text))
-        .or_else(|| display_name.and_then(cadence_from_text))
+        .and_then(|text| cadence_from_text(text, rules))
+        .or_else(|| bucket_id.and_then(|text| cadence_from_text(text, rules)))
+        .or_else(|| display_name.and_then(|text| cadence_from_text(text, rules)))
 }
 
-fn cadence_from_text(raw: &str) -> Option<QuotaCadence> {
+fn cadence_from_text(raw: &str, rules: &AntigravityRules) -> Option<QuotaCadence> {
     let normalized = normalize_token(raw);
     let stripped = normalized.strip_suffix(" limit").unwrap_or(&normalized);
-    if matches_alias(stripped, &SESSION_ALIASES) {
+    if matches_alias(stripped, &rules.session_aliases) {
         return Some(QuotaCadence::Session);
     }
-    if matches_alias(stripped, &WEEKLY_ALIASES) {
+    if matches_alias(stripped, &rules.daily_aliases) {
+        return Some(QuotaCadence::Daily);
+    }
+    if matches_alias(stripped, &rules.weekly_aliases) {
         return Some(QuotaCadence::Weekly);
     }
     None
 }
 
-fn matches_alias(value: &str, aliases: &[&str]) -> bool {
+fn matches_alias(value: &str, aliases: &[String]) -> bool {
     aliases.iter().any(|alias| {
-        value == *alias
+        value == alias
             || value.ends_with(&format!("-{alias}"))
             || value.ends_with(&format!(" {alias}"))
             || value.starts_with(&format!("{alias}-"))
@@ -386,22 +500,33 @@ pub fn parse_quota_buckets(value: &Value) -> Vec<ModelConfig> {
         .collect()
 }
 
+#[cfg(test)]
 pub fn build_legacy_quotas(configs: Vec<ModelConfig>) -> Vec<QuotaWindow> {
+    build_legacy_quotas_with_rules(configs, AntigravityRules::bundled())
+}
+
+pub fn build_legacy_quotas_with_rules(
+    configs: Vec<ModelConfig>,
+    rules: &AntigravityRules,
+) -> Vec<QuotaWindow> {
     let mut gemini: Option<(f64, Option<chrono::DateTime<chrono::Utc>>)> = None;
     let mut claude: Option<(f64, Option<chrono::DateTime<chrono::Utc>>)> = None;
     for config in configs {
-        if config
-            .model_id
-            .as_deref()
-            .is_some_and(|id| MODEL_BLACKLIST.contains(&id))
-        {
+        if config.model_id.as_deref().is_some_and(|id| {
+            rules
+                .model_blacklist
+                .iter()
+                .any(|blacklisted| blacklisted == id)
+        }) {
             continue;
         }
-        let is_gemini = config.label.to_ascii_lowercase().contains("gemini")
-            || config
-                .model_id
-                .as_deref()
-                .is_some_and(|id| id.to_ascii_lowercase().contains("gemini"));
+        let is_gemini = rules.gemini_keywords.iter().any(|keyword| {
+            config.label.to_ascii_lowercase().contains(keyword)
+                || config
+                    .model_id
+                    .as_deref()
+                    .is_some_and(|id| id.to_ascii_lowercase().contains(keyword))
+        });
         let pool = if is_gemini { &mut gemini } else { &mut claude };
         if pool
             .as_ref()
@@ -524,6 +649,40 @@ mod tests {
             }
         });
         assert!(parse_quota_summary(&value).is_none());
+    }
+
+    #[test]
+    fn preserves_new_server_buckets_as_dynamic_quotas() {
+        let value = json!({
+            "response": {
+                "groups": [
+                    {
+                        "displayName": "Gemini Models",
+                        "buckets": [
+                            { "bucketId": "gemini-5h", "remainingFraction": 0.8 }
+                        ]
+                    },
+                    {
+                        "displayName": "Veo Video",
+                        "buckets": [
+                            {
+                                "bucketId": "veo-daily",
+                                "displayName": "Daily Limit",
+                                "remainingFraction": 0.35,
+                                "resetTime": "2026-11-27T00:00:00Z"
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+        let quotas = parse_quota_summary(&value).unwrap();
+        assert_eq!(quotas.len(), 2);
+        assert_eq!(quotas[0].id, "geminiPro");
+        assert_eq!(quotas[1].id, "dyn:veo-daily");
+        assert_eq!(quotas[1].label, "Veo Video · Daily Limit");
+        assert_eq!(quotas[1].used_percent, 65.0);
+        assert_eq!(quotas[1].period_seconds, 24 * 60 * 60);
     }
 
     #[test]

@@ -536,14 +536,55 @@ fn panel_maximum_height(window: &WebviewWindow) -> Result<u32, String> {
     Ok((inner_cap / scale).floor().clamp(1.0, f64::from(u32::MAX)) as u32)
 }
 
+fn configured_panel_width(window: &WebviewWindow) -> f64 {
+    window
+        .app_handle()
+        .try_state::<Arc<SettingsService>>()
+        .map(|settings| {
+            f64::from(settings.get().panel_width.clamp(
+                crate::settings::MIN_PANEL_WIDTH,
+                crate::settings::MAX_PANEL_WIDTH,
+            ))
+        })
+        .unwrap_or(PANEL_WIDTH)
+}
+
 fn configure_panel_size_constraints(window: &WebviewWindow) -> Result<u32, String> {
+    let width = configured_panel_width(window);
     let maximum = panel_maximum_height(window)?;
     let minimum = PANEL_MIN_HEIGHT.min(maximum);
     window
-        .set_max_size(Some(LogicalSize::new(PANEL_WIDTH, f64::from(maximum))))
-        .and_then(|_| window.set_min_size(Some(LogicalSize::new(PANEL_WIDTH, f64::from(minimum)))))
+        .set_max_size(Some(LogicalSize::new(width, f64::from(maximum))))
+        .and_then(|_| window.set_min_size(Some(LogicalSize::new(width, f64::from(minimum)))))
         .map_err(|_| "OpenQuota panel size limits could not be applied.".to_owned())?;
     Ok(maximum)
+}
+
+pub fn apply_panel_width(window: &WebviewWindow, width: u32) -> Result<(), String> {
+    let width = f64::from(width.clamp(
+        crate::settings::MIN_PANEL_WIDTH,
+        crate::settings::MAX_PANEL_WIDTH,
+    ));
+    let maximum = panel_maximum_height(window)?;
+    let minimum = PANEL_MIN_HEIGHT.min(maximum);
+    let height = current_logical_height(&window.as_ref().window())
+        .unwrap_or(minimum)
+        .clamp(minimum, maximum);
+    window
+        .set_max_size(Some(LogicalSize::new(width, f64::from(maximum))))
+        .and_then(|_| window.set_min_size(Some(LogicalSize::new(width, f64::from(minimum)))))
+        .map_err(|_| "OpenQuota panel size limits could not be applied.".to_owned())?;
+    if window
+        .app_handle()
+        .state::<DesktopIntegration>()
+        .is_floating()
+    {
+        window
+            .set_size(LogicalSize::new(width, f64::from(height)))
+            .map_err(|_| "OpenQuota window could not be resized.".to_owned())
+    } else {
+        resize_popup_anchored_with_width(window, width, height)
+    }
 }
 
 fn restore_manual_panel_height(window: &WebviewWindow) -> Result<(), String> {
@@ -561,16 +602,17 @@ fn restore_manual_panel_height(window: &WebviewWindow) -> Result<(), String> {
 }
 
 fn resize_panel_for_context(window: &WebviewWindow, height: u32) -> Result<(), String> {
+    let width = configured_panel_width(window);
     if window
         .app_handle()
         .state::<DesktopIntegration>()
         .is_floating()
     {
         return window
-            .set_size(LogicalSize::new(PANEL_WIDTH, f64::from(height)))
+            .set_size(LogicalSize::new(width, f64::from(height)))
             .map_err(|_| "OpenQuota window could not be resized.".to_owned());
     }
-    resize_popup_anchored(window, height)
+    resize_popup_anchored_with_width(window, width, height)
 }
 
 pub fn fit_panel_to_content(window: &WebviewWindow, height: u32) -> Result<bool, String> {
@@ -633,8 +675,9 @@ pub fn lock_native_panel_resize_axis(window: &WebviewWindow) -> Result<(), Strin
         .scale_factor()
         .map_err(|_| "OpenQuota display scale is unavailable.")?;
     let height = f64::from(size.height) / scale;
+    let width = configured_panel_width(window);
     window
-        .set_size(LogicalSize::new(PANEL_WIDTH, height))
+        .set_size(LogicalSize::new(width, height))
         .map_err(|_| "OpenQuota panel resize could not be settled.".to_owned())
 }
 
@@ -649,7 +692,11 @@ fn current_logical_height(window: &Window) -> Option<u32> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn resize_popup_anchored(window: &WebviewWindow, height: u32) -> Result<(), String> {
+fn resize_popup_anchored_with_width(
+    window: &WebviewWindow,
+    width: f64,
+    height: u32,
+) -> Result<(), String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SetWindowPos, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
     };
@@ -671,11 +718,22 @@ pub fn resize_popup_anchored(window: &WebviewWindow, height: u32) -> Result<(), 
         .map_err(|_| "OpenQuota display is unavailable.")?
         .ok_or("OpenQuota display is unavailable.")?;
     let work_area = monitor.work_area();
-    let frame_overhead = outer_size.height.saturating_sub(inner_size.height);
+    let height_overhead = outer_size.height.saturating_sub(inner_size.height);
+    let width_overhead = outer_size.width.saturating_sub(inner_size.width);
     let target_inner_height = (f64::from(height) * scale)
         .round()
         .clamp(1.0, f64::from(u32::MAX));
-    let target_outer_height = (target_inner_height as u32).saturating_add(frame_overhead);
+    let target_inner_width = (width * scale).round().clamp(1.0, f64::from(u32::MAX));
+    let target_outer_height = (target_inner_height as u32).saturating_add(height_overhead);
+    let target_outer_width = (target_inner_width as u32).saturating_add(width_overhead);
+    let work_left = i64::from(work_area.position.x);
+    let work_right = work_left + i64::from(work_area.size.width);
+    let max_left = work_right
+        .saturating_sub(i64::from(target_outer_width))
+        .max(work_left);
+    let anchored_x = i64::from(outer_position.x)
+        .clamp(work_left, max_left)
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
     let anchored = anchored_vertical_frame(
         VerticalFrame {
             top: outer_position.y,
@@ -694,9 +752,9 @@ pub fn resize_popup_anchored(window: &WebviewWindow, height: u32) -> Result<(), 
                 .map_err(|_| "OpenQuota native window is unavailable.")?
                 .0 as _,
             std::ptr::null_mut(),
-            outer_position.x,
+            anchored_x,
             anchored.top,
-            i32::try_from(outer_size.width).unwrap_or(i32::MAX),
+            i32::try_from(target_outer_width).unwrap_or(i32::MAX),
             i32::try_from(anchored.height).unwrap_or(i32::MAX),
             SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER,
         )
@@ -708,7 +766,11 @@ pub fn resize_popup_anchored(window: &WebviewWindow, height: u32) -> Result<(), 
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn resize_popup_anchored(window: &WebviewWindow, height: u32) -> Result<(), String> {
+fn resize_popup_anchored_with_width(
+    window: &WebviewWindow,
+    width: f64,
+    height: u32,
+) -> Result<(), String> {
     let outer_position = window
         .outer_position()
         .map_err(|_| "OpenQuota window position is unavailable.")?;
@@ -738,7 +800,7 @@ pub fn resize_popup_anchored(window: &WebviewWindow, height: u32) -> Result<(), 
         target_outer_height,
     );
     window
-        .set_size(tauri::LogicalSize::new(320.0, f64::from(height)))
+        .set_size(tauri::LogicalSize::new(width, f64::from(height)))
         .and_then(|_| {
             window.set_position(tauri::PhysicalPosition::new(outer_position.x, anchored.top))
         })

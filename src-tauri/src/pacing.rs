@@ -164,6 +164,12 @@ pub struct NotificationEvaluator {
 
 impl NotificationEvaluator {
     pub fn prune(&self, settings: &AppSettings) {
+        let enabled_providers = settings
+            .providers
+            .iter()
+            .filter(|provider| provider.enabled)
+            .map(|provider| provider.id.as_str())
+            .collect::<HashSet<_>>();
         let active = settings
             .providers
             .iter()
@@ -177,7 +183,12 @@ impl NotificationEvaluator {
             })
             .collect::<HashSet<_>>();
         if let Ok(mut states) = self.states.lock() {
-            states.retain(|metric_id, _| active.contains(metric_id));
+            states.retain(|metric_id, _| {
+                active.contains(metric_id)
+                    || metric_id
+                        .split_once(".dyn:")
+                        .is_some_and(|(provider_id, _)| enabled_providers.contains(provider_id))
+            });
         }
     }
 
@@ -226,20 +237,25 @@ impl NotificationEvaluator {
         };
         let mut alerts = Vec::new();
         for window in &snapshot.quotas {
-            let Some(metric_definition) = provider_definition.metrics.iter().find(|metric| {
+            let metric_id = match provider_definition.metrics.iter().find(|metric| {
                 matches!(
                     &metric.source,
                     MetricSource::Quota { source_id, .. }
                         | MetricSource::QuotaOrValue { source_id, .. }
                         if source_id == &window.id
                 )
-            }) else {
-                continue;
+            }) {
+                Some(metric_definition) => {
+                    if !enabled.contains(metric_definition.id.as_str()) {
+                        continue;
+                    }
+                    metric_definition.id.clone()
+                }
+                None if provider_definition.dynamic_quotas => {
+                    format!("{}.{}", snapshot.provider_id, window.id)
+                }
+                None => continue,
             };
-            if !enabled.contains(metric_definition.id.as_str()) {
-                continue;
-            }
-            let metric_id = metric_definition.id.clone();
             let projection = project(window, now);
             let state = states.entry(metric_id.clone()).or_default();
             let previous_severity = state.previous;
@@ -654,6 +670,7 @@ mod tests {
             display_name: "Custom Provider".into(),
             short_name: "C".into(),
             fallback_enabled: true,
+            dynamic_quotas: false,
             local_usage_source_note: None,
             links: vec![],
             metrics: vec![MetricDefinition::new(
@@ -743,6 +760,7 @@ mod tests {
             display_name: "Switching".into(),
             short_name: "Sw".into(),
             fallback_enabled: true,
+            dynamic_quotas: false,
             local_usage_source_note: None,
             links: vec![],
             metrics: vec![

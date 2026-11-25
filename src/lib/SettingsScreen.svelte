@@ -45,7 +45,61 @@
   }: Props = $props();
   let recording = $state(false);
   let logActionError = $state<string | null>(null);
+  let customUpdateSource = $state(false);
+  let updateEndpointDraft = $state('');
+  let updateEndpointInvalid = $state(false);
+  let lastSavedUpdateEndpoint: string | null | undefined;
   const settings = $derived(settingsView.settings);
+  $effect(() => {
+    const saved = settings.updateEndpoint ?? null;
+    if (saved !== lastSavedUpdateEndpoint) {
+      lastSavedUpdateEndpoint = saved;
+      if (saved) {
+        customUpdateSource = true;
+        updateEndpointDraft = saved;
+      } else {
+        customUpdateSource = false;
+        updateEndpointDraft = '';
+      }
+      updateEndpointInvalid = false;
+    }
+  });
+  function selectUpdateSourceMode(mode: string) {
+    if (mode === 'custom') {
+      customUpdateSource = true;
+      updateEndpointDraft = settings.updateEndpoint ?? '';
+      updateEndpointInvalid = false;
+      return;
+    }
+    customUpdateSource = false;
+    updateEndpointInvalid = false;
+    if (settings.updateEndpoint !== null) {
+      patch({ updateEndpoint: null });
+    }
+  }
+  function saveCustomUpdateEndpoint() {
+    const trimmed = updateEndpointDraft.trim();
+    if (!trimmed) {
+      customUpdateSource = false;
+      updateEndpointInvalid = false;
+      if (settings.updateEndpoint !== null) patch({ updateEndpoint: null });
+      return;
+    }
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== 'https:' || !parsed.hostname) {
+        updateEndpointInvalid = true;
+        return;
+      }
+    } catch {
+      updateEndpointInvalid = true;
+      return;
+    }
+    updateEndpointInvalid = false;
+    if (trimmed !== settings.updateEndpoint) {
+      patch({ updateEndpoint: trimmed });
+    }
+  }
   const revealLogLabel = $derived(
     platform === 'macos'
       ? t('settings.revealFinder')
@@ -149,6 +203,21 @@
         onchange={(event) => patch({ showTotalSpend: event.currentTarget.checked })}
       /></label
     >
+    <div class="setting-row">
+      <span><b>{t('settings.refreshInterval')}</b></span><SelectMenu
+        label={t('settings.refreshInterval')}
+        value={String(settings.refreshIntervalSeconds ?? 300)}
+        options={[
+          { value: '60', label: t('settings.refreshMinutes', { minutes: 1 }) },
+          { value: '180', label: t('settings.refreshMinutes', { minutes: 3 }) },
+          { value: '300', label: t('settings.refreshMinutes', { minutes: 5 }) },
+          { value: '600', label: t('settings.refreshMinutes', { minutes: 10 }) },
+          { value: '900', label: t('settings.refreshMinutes', { minutes: 15 }) },
+          { value: '1800', label: t('settings.refreshMinutes', { minutes: 30 }) },
+        ]}
+        onChange={(value) => patch({ refreshIntervalSeconds: Number(value) })}
+      />
+    </div>
     <label class="setting-row"
       ><span><b>{t('settings.launchAtLogin')}</b></span><input
         type="checkbox"
@@ -262,6 +331,19 @@
           { value: 'manual', label: t('settings.panelHeightManual') },
         ]}
         onChange={(value) => onPanelHeightModeChange(value as PanelHeightMode)}
+      />
+    </div>
+    <div class="setting-row">
+      <span><b>{t('settings.panelWidth')}</b></span><SelectMenu
+        label={t('settings.panelWidth')}
+        value={String(settings.panelWidth ?? 320)}
+        options={[
+          { value: '320', label: t('settings.panelWidthCompact') },
+          { value: '360', label: t('settings.panelWidthStandard') },
+          { value: '400', label: t('settings.panelWidthWide') },
+          { value: '460', label: t('settings.panelWidthExtraWide') },
+        ]}
+        onChange={(value) => patch({ panelWidth: Number(value) })}
       />
     </div>
     <div class="setting-row">
@@ -440,6 +522,49 @@
         onchange={(event) => patch({ autoCheckUpdates: event.currentTarget.checked })}
       /></label
     >
+    <div class="setting-row">
+      <span><b>{t('settings.updateSource')}</b></span><SelectMenu
+        label={t('settings.updateSource')}
+        value={customUpdateSource ? 'custom' : 'default'}
+        options={[
+          { value: 'default', label: t('settings.updateSourceDefault') },
+          { value: 'custom', label: t('settings.updateSourceCustom') },
+        ]}
+        onChange={selectUpdateSourceMode}
+      />
+    </div>
+    {#if customUpdateSource}
+      <div class="setting-row setting-row--stack">
+        <div class="update-source-editor">
+          <input
+            type="url"
+            class="update-source-input"
+            aria-label={t('settings.updateSourceAria')}
+            placeholder={t('settings.updateSourcePlaceholder')}
+            bind:value={updateEndpointDraft}
+            oninput={() => (updateEndpointInvalid = false)}
+            onkeydown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                saveCustomUpdateEndpoint();
+              }
+            }}
+          />
+          <button
+            type="button"
+            class="secondary-button"
+            onclick={saveCustomUpdateEndpoint}
+            disabled={updateEndpointDraft.trim() === (settings.updateEndpoint ?? '')}
+            >{t('common.save')}</button
+          >
+        </div>
+        <small class:update-source-error={updateEndpointInvalid}
+          >{updateEndpointInvalid
+            ? t('settings.updateSourceInvalid')
+            : t('settings.updateSourceHint')}</small
+        >
+      </div>
+    {/if}
     <div class="setting-row setting-row--button">
       <button
         type="button"
@@ -699,6 +824,39 @@
 
     .setting-row--button {
       display: block;
+    }
+
+    .setting-row--stack {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+    }
+
+    .update-source-editor {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .update-source-input {
+      min-width: 0;
+      flex: 1;
+      padding: 4px 8px;
+      border: 1px solid var(--separator);
+      border-radius: 6px;
+      color: var(--text);
+      background: var(--tray);
+      font-size: 11px;
+    }
+
+    .update-source-input:focus-visible {
+      border-color: var(--meter-fill);
+      outline: none;
+    }
+
+    .update-source-error {
+      color: var(--error);
     }
 
     .settings-wide-button {

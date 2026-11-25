@@ -59,14 +59,16 @@ export class UpdateController {
   }
 }
 
-export function nextUpdateLabel(value: string | undefined, now: number) {
+export function nextUpdateLabel(
+  value: string | undefined,
+  now: number,
+  intervalSeconds = USAGE_REFRESH_INTERVAL_MS / 1000,
+) {
   if (!value) return t('update.waitingFirst');
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) return t('update.nextUnavailable');
-  const remaining = Math.min(
-    USAGE_REFRESH_INTERVAL_MS,
-    Math.max(0, timestamp + USAGE_REFRESH_INTERVAL_MS - now),
-  );
+  const intervalMs = Math.max(60_000, intervalSeconds * 1000);
+  const remaining = Math.min(intervalMs, Math.max(0, timestamp + intervalMs - now));
   const seconds = Math.ceil(remaining / 1000);
   return seconds >= 60
     ? t('update.nextMinutes', { minutes: Math.ceil(seconds / 60) })

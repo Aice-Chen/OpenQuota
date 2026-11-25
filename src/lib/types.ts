@@ -170,6 +170,7 @@ export interface ProviderDefinition {
   displayName: string;
   shortName: string;
   fallbackEnabled: boolean;
+  dynamicQuotas?: boolean;
   localUsageSourceNote: string | null;
   links: ProviderLink[];
   metrics: MetricDefinition[];
@@ -214,13 +215,16 @@ export interface AppSettings {
   density: 'default' | 'compact';
   reduceAnimations: boolean;
   windowMode: 'popup' | 'floating';
+  panelWidth: number;
   menuBarStyle: 'text' | 'bars';
   usageDisplay: 'used' | 'left';
   resetDisplay: 'countdown' | 'exact';
   timeFormat: 'system' | 'twelveHour' | 'twentyFourHour';
   alwaysShowPacing: boolean;
+  refreshIntervalSeconds: number;
   launchAtLogin: boolean;
   autoCheckUpdates: boolean;
+  updateEndpoint: string | null;
   dismissedUpdateVersion: string | null;
   lastUpdateCheckAt: string | null;
   globalShortcut: string | null;

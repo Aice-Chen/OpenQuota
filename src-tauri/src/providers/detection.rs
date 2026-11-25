@@ -119,6 +119,7 @@ mod tests {
                 display_name: id.into(),
                 short_name: id.into(),
                 fallback_enabled: true,
+                dynamic_quotas: false,
                 local_usage_source_note: None,
                 links: vec![],
                 metrics: vec![MetricDefinition::new(

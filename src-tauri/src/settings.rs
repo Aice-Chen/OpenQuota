@@ -19,6 +19,12 @@ use crate::{
 };
 
 pub const MAX_PINS_PER_PROVIDER: usize = 2;
+pub const MIN_REFRESH_INTERVAL_SECONDS: u64 = 60;
+pub const DEFAULT_REFRESH_INTERVAL_SECONDS: u64 = 300;
+pub const MAX_REFRESH_INTERVAL_SECONDS: u64 = 3_600;
+pub const MIN_PANEL_WIDTH: u32 = 320;
+pub const DEFAULT_PANEL_WIDTH: u32 = 320;
+pub const MAX_PANEL_WIDTH: u32 = 520;
 
 #[derive(Debug, Clone)]
 pub struct CredentialDetectionPlan {
@@ -51,6 +57,7 @@ pub struct SettingsService {
     settings_revision: AtomicU64,
     account_revision: AtomicU64,
     active_account_identities: RwLock<HashMap<String, String>>,
+    refresh_interval_notify: tokio::sync::Notify,
 }
 
 impl SettingsService {
@@ -77,6 +84,7 @@ impl SettingsService {
             settings_revision: AtomicU64::new(0),
             account_revision: AtomicU64::new(0),
             active_account_identities: RwLock::new(HashMap::new()),
+            refresh_interval_notify: tokio::sync::Notify::new(),
         };
         service.activate_launch_accounts()?;
         Ok(service)
@@ -136,6 +144,7 @@ impl SettingsService {
             settings_revision: AtomicU64::new(0),
             account_revision: AtomicU64::new(0),
             active_account_identities: RwLock::new(HashMap::new()),
+            refresh_interval_notify: tokio::sync::Notify::new(),
         };
         service.activate_launch_accounts()?;
         let plan = CredentialDetectionPlan {
@@ -153,6 +162,20 @@ impl SettingsService {
             .read()
             .map(|settings| settings.clone())
             .unwrap_or_default()
+    }
+
+    pub fn refresh_interval(&self) -> std::time::Duration {
+        let seconds = self.get().refresh_interval_seconds;
+        let normalized = if seconds == 0 {
+            DEFAULT_REFRESH_INTERVAL_SECONDS
+        } else {
+            seconds.clamp(MIN_REFRESH_INTERVAL_SECONDS, MAX_REFRESH_INTERVAL_SECONDS)
+        };
+        std::time::Duration::from_secs(normalized)
+    }
+
+    pub async fn wait_refresh_interval_changed(&self) {
+        self.refresh_interval_notify.notified().await;
     }
 
     pub(crate) async fn lock_command_mutation(&self) -> tokio::sync::MutexGuard<'_, ()> {
@@ -361,6 +384,7 @@ impl SettingsService {
             );
         }
         let enabled_before = enabled_provider_set(&current);
+        let refresh_interval_before = current.refresh_interval_seconds;
         let detected = current
             .providers
             .iter()
@@ -370,6 +394,7 @@ impl SettingsService {
         let persisted_accounts = persisted_account_provider_ids(&self.storage)
             .map_err(|_| "OpenQuota account settings could not be loaded.".to_owned())?;
         normalize_with_persisted_accounts(&self.registry, settings, &detected, &persisted_accounts);
+        crate::updates::validate_custom_update_endpoint(settings.update_endpoint.as_deref())?;
         if expected_account_revision != Some(self.account_revision.load(Ordering::SeqCst)) {
             let active_provider_ids = self
                 .active_account_identities
@@ -396,9 +421,13 @@ impl SettingsService {
             .save_settings_with_account_updates(settings, &account_updates)
             .map_err(|_| "OpenQuota settings could not be saved.".to_owned())?;
         let enablement_changed = enabled_provider_set(settings) != enabled_before;
+        let refresh_interval_changed = settings.refresh_interval_seconds != refresh_interval_before;
         current.clone_from(settings);
         if enablement_changed {
             self.enablement_revision.fetch_add(1, Ordering::SeqCst);
+        }
+        if refresh_interval_changed {
+            self.refresh_interval_notify.notify_waiters();
         }
         self.settings_revision.fetch_add(1, Ordering::SeqCst);
         Ok(settings.clone())
@@ -715,6 +744,23 @@ fn normalize_with_persisted_accounts(
     let catalog = registry.catalog();
     let migrating_to_multi_provider = settings.schema_version < 3;
     settings.schema_version = 7;
+    settings.refresh_interval_seconds = if settings.refresh_interval_seconds == 0 {
+        DEFAULT_REFRESH_INTERVAL_SECONDS
+    } else {
+        settings
+            .refresh_interval_seconds
+            .clamp(MIN_REFRESH_INTERVAL_SECONDS, MAX_REFRESH_INTERVAL_SECONDS)
+    };
+    settings.panel_width = if settings.panel_width == 0 {
+        DEFAULT_PANEL_WIDTH
+    } else {
+        settings.panel_width.clamp(MIN_PANEL_WIDTH, MAX_PANEL_WIDTH)
+    };
+    settings.update_endpoint = settings
+        .update_endpoint
+        .take()
+        .map(|endpoint| endpoint.trim().to_owned())
+        .filter(|endpoint| !endpoint.is_empty());
     settings.dismissed_update_version = settings
         .dismissed_update_version
         .take()

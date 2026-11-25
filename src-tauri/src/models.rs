@@ -547,6 +547,8 @@ pub struct ProviderDefinition {
     pub display_name: String,
     pub short_name: String,
     pub fallback_enabled: bool,
+    #[serde(default)]
+    pub dynamic_quotas: bool,
     pub local_usage_source_note: Option<String>,
     #[serde(default)]
     pub links: Vec<ProviderLink>,
@@ -713,13 +715,16 @@ pub struct AppSettings {
     pub density: DensityPreference,
     pub reduce_animations: bool,
     pub window_mode: WindowMode,
+    pub panel_width: u32,
     pub menu_bar_style: MenuBarStyle,
     pub usage_display: UsageDisplay,
     pub reset_display: ResetDisplay,
     pub time_format: TimeFormatPreference,
     pub always_show_pacing: bool,
+    pub refresh_interval_seconds: u64,
     pub launch_at_login: bool,
     pub auto_check_updates: bool,
+    pub update_endpoint: Option<String>,
     pub dismissed_update_version: Option<String>,
     pub last_update_check_at: Option<DateTime<Utc>>,
     pub global_shortcut: Option<String>,
@@ -743,13 +748,16 @@ impl Default for AppSettings {
             density: DensityPreference::Default,
             reduce_animations: false,
             window_mode: WindowMode::Popup,
+            panel_width: 320,
             menu_bar_style: MenuBarStyle::Text,
             usage_display: UsageDisplay::Left,
             reset_display: ResetDisplay::Countdown,
             time_format: TimeFormatPreference::System,
             always_show_pacing: false,
+            refresh_interval_seconds: 300,
             launch_at_login: false,
             auto_check_updates: true,
+            update_endpoint: None,
             dismissed_update_version: None,
             last_update_check_at: None,
             global_shortcut: None,
@@ -802,7 +810,10 @@ mod tests {
         object.remove("logLevel");
         object.remove("providerNames");
         object.remove("windowMode");
+        object.remove("panelWidth");
         object.remove("reduceAnimations");
+        object.remove("refreshIntervalSeconds");
+        object.remove("updateEndpoint");
 
         let settings: AppSettings = serde_json::from_value(value).unwrap();
         assert_eq!(settings.dismissed_update_version, None);
@@ -811,7 +822,10 @@ mod tests {
         assert_eq!(settings.language, LanguagePreference::System);
         assert_eq!(settings.log_level, LogLevel::Info);
         assert_eq!(settings.window_mode, WindowMode::Popup);
+        assert_eq!(settings.panel_width, 320);
         assert!(!settings.reduce_animations);
+        assert_eq!(settings.refresh_interval_seconds, 300);
+        assert_eq!(settings.update_endpoint, None);
     }
 
     #[test]

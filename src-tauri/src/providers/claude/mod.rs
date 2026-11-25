@@ -32,6 +32,7 @@ fn definition_for(id: &str, display_name: &str, fallback_enabled: bool) -> Provi
         display_name: display_name.into(),
         short_name: "Cl".into(),
         fallback_enabled,
+        dynamic_quotas: false,
         local_usage_source_note: Some("From your Claude usage history (estimated)".into()),
         links: vec![
             ProviderLink::new("Status", "https://status.anthropic.com/"),

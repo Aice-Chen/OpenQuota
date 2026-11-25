@@ -34,6 +34,7 @@ pub(crate) fn definition() -> ProviderDefinition {
         display_name: "Cursor".into(),
         short_name: "Cu".into(),
         fallback_enabled: true,
+        dynamic_quotas: false,
         local_usage_source_note: Some("From your Cursor usage export".into()),
         links: vec![
             ProviderLink::new("Status", "https://status.cursor.com/"),

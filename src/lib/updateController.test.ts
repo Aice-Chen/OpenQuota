@@ -25,8 +25,10 @@ describe('update controller helpers', () => {
     expect(nextUpdateLabel('invalid', now)).toBe('Next update unavailable');
   });
 
-  it('never shows more than the five-minute refresh interval when the UI clock lags', () => {
+  it('never shows more than the configured refresh interval when the UI clock lags', () => {
     const staleUiClock = Date.parse('2026-07-13T12:00:00Z');
     expect(nextUpdateLabel('2026-07-13T12:00:20Z', staleUiClock)).toBe('Next update in 5m');
+    expect(nextUpdateLabel('2026-07-13T12:00:20Z', staleUiClock, 900)).toBe('Next update in 15m');
+    expect(nextUpdateLabel('2026-07-13T11:55:00Z', staleUiClock, 600)).toBe('Next update in 5m');
   });
 });

@@ -7,11 +7,11 @@ use std::{
 };
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, Url};
 use tauri_plugin_updater::{Error as UpdaterError, Update, UpdaterExt};
 use tokio::sync::Mutex;
 
-use crate::child_process::background_command;
+use crate::{child_process::background_command, settings::SettingsService};
 
 const RELEASE_URL: &str = "https://github.com/Aice-Chen/OpenQuota/releases/latest";
 
@@ -164,10 +164,66 @@ async fn download_and_install_once(app: &AppHandle, update: &Update) -> Result<(
         .await
 }
 
+pub fn parse_custom_update_endpoint(raw: Option<&str>) -> Result<Option<Url>, UpdateFailure> {
+    let Some(trimmed) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let url = Url::parse(trimmed).map_err(|_| invalid_endpoint_failure())?;
+    if url.scheme() != "https" || url.host_str().is_none() {
+        return Err(invalid_endpoint_failure());
+    }
+    Ok(Some(url))
+}
+
+pub fn validate_custom_update_endpoint(raw: Option<&str>) -> Result<(), String> {
+    parse_custom_update_endpoint(raw)
+        .map(|_| ())
+        .map_err(|_| "Update source must be a valid HTTPS URL.".to_owned())
+}
+
+fn invalid_endpoint_failure() -> UpdateFailure {
+    UpdateFailure::new(
+        "invalid_endpoint",
+        "The custom update source must be a valid HTTPS URL.",
+        "Check the update source URL in Settings or switch back to GitHub default.",
+        false,
+    )
+}
+
+async fn check_update(
+    app: &AppHandle,
+    custom_endpoint: Option<&str>,
+    operation: &'static str,
+) -> Result<Option<Update>, UpdateFailure> {
+    let endpoint = parse_custom_update_endpoint(custom_endpoint)?;
+    let updater = match endpoint {
+        Some(url) => {
+            crate::app_info!("updates", "using custom update endpoint {}", url.as_str());
+            app.updater_builder()
+                .endpoints(vec![url])
+                .and_then(|builder| builder.build())
+        }
+        None => app.updater(),
+    }
+    .map_err(|_| {
+        UpdateFailure::new(
+            "not_configured",
+            "Automatic updates are not configured in this build.",
+            "Download the latest version from the release page.",
+            false,
+        )
+    })?;
+    updater.check().await.map_err(|error| {
+        crate::app_warn!("updates", "update check failed: {error}");
+        classify_updater_error(&error, operation)
+    })
+}
+
 #[tauri::command]
 pub async fn check_for_updates(
     app: AppHandle,
     coordinator: State<'_, UpdateCoordinator>,
+    settings: State<'_, Arc<SettingsService>>,
 ) -> Result<UpdateStatus, UpdateFailure> {
     crate::app_info!("updates", "update check started");
     let _operation = coordinator.operation.try_lock().map_err(|_| {
@@ -179,22 +235,8 @@ pub async fn check_for_updates(
         )
     })?;
     let current_version = app.package_info().version.to_string();
-    let update = app
-        .updater()
-        .map_err(|_| {
-            UpdateFailure::new(
-                "not_configured",
-                "Automatic updates are not configured in this build.",
-                "Download the latest version from the release page.",
-                false,
-            )
-        })?
-        .check()
-        .await
-        .map_err(|error| {
-            crate::app_warn!("updates", "update check failed: {error}");
-            classify_updater_error(&error, "check for updates")
-        })?;
+    let endpoint = settings.get().update_endpoint;
+    let update = check_update(&app, endpoint.as_deref(), "check for updates").await?;
     crate::app_info!(
         "updates",
         "update check finished ({})",
@@ -228,6 +270,7 @@ pub async fn check_for_updates(
 pub async fn install_update(
     app: AppHandle,
     coordinator: State<'_, UpdateCoordinator>,
+    settings: State<'_, Arc<SettingsService>>,
 ) -> Result<(), UpdateFailure> {
     crate::app_info!("updates", "signed update installation started");
     if !supports_in_app_install() {
@@ -246,19 +289,9 @@ pub async fn install_update(
             true,
         )
     })?;
-    let update = app
-        .updater()
-        .map_err(|_| {
-            UpdateFailure::new(
-                "not_configured",
-                "Automatic updates are not configured in this build.",
-                "Download the latest version from the release page.",
-                false,
-            )
-        })?
-        .check()
-        .await
-        .map_err(|error| classify_updater_error(&error, "check for updates"))?
+    let endpoint = settings.get().update_endpoint;
+    let update = check_update(&app, endpoint.as_deref(), "check for updates")
+        .await?
         .ok_or_else(|| {
             UpdateFailure::new(
                 "up_to_date",
@@ -314,9 +347,28 @@ pub fn open_update_page() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_updater_error, progress, retryable_download_error, supports_in_app_install_for,
+        classify_updater_error, parse_custom_update_endpoint, progress, retryable_download_error,
+        supports_in_app_install_for, validate_custom_update_endpoint,
     };
     use tauri_plugin_updater::Error as UpdaterError;
+
+    #[test]
+    fn custom_update_endpoint_requires_https_and_allows_blank_default() {
+        let valid = "https://mirror.example.com/latest.json";
+        let insecure = "http://mirror.example.com/latest.json";
+        assert_eq!(parse_custom_update_endpoint(None).unwrap(), None);
+        assert_eq!(parse_custom_update_endpoint(Some("   ")).unwrap(), None);
+        let parsed = parse_custom_update_endpoint(Some(valid)).unwrap();
+        assert_eq!(parsed.as_ref().map(tauri::Url::as_str), Some(valid));
+        assert_eq!(
+            parse_custom_update_endpoint(Some(insecure))
+                .unwrap_err()
+                .code,
+            "invalid_endpoint"
+        );
+        assert!(validate_custom_update_endpoint(Some("not-a-url")).is_err());
+        assert!(validate_custom_update_endpoint(Some(valid)).is_ok());
+    }
 
     #[test]
     fn download_progress_is_bounded_and_handles_unknown_totals() {
