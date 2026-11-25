@@ -31,7 +31,7 @@ pub struct ProviderService {
     registry: Arc<ProviderRegistry>,
     storage: Arc<Storage>,
     states: RwLock<BTreeMap<String, ProviderViewState>>,
-    refresh_flights: HashMap<String, Arc<RefreshFlight>>,
+    refresh_flights: Mutex<HashMap<String, Arc<RefreshFlight>>>,
     last_live_refresh: Mutex<HashMap<String, Instant>>,
     last_failed_refresh: Mutex<HashMap<String, Instant>>,
     last_full_refresh_at: RwLock<Option<chrono::DateTime<Utc>>>,
@@ -77,21 +77,7 @@ impl ProviderService {
         let mut refresh_flights = HashMap::new();
         for definition in &registry.catalog().providers {
             let id = definition.id.clone();
-            let state = match storage.load_snapshot_for_identity(&id, registry.cache_identity(&id))
-            {
-                Ok(Some(snapshot)) => {
-                    crate::app_debug!("cache", "loaded cached snapshot for {id}");
-                    ProviderViewState::from_cache(snapshot)
-                }
-                Ok(None) => ProviderViewState::default(),
-                Err(error) => {
-                    crate::app_warn!(
-                        "cache",
-                        "cached snapshot for {id} could not be loaded: {error}"
-                    );
-                    ProviderViewState::default()
-                }
-            };
+            let state = load_cached_state(&storage, &registry, &id);
             states.insert(id.clone(), state);
             refresh_flights.insert(id, Arc::new(RefreshFlight::new()));
         }
@@ -99,13 +85,49 @@ impl ProviderService {
             registry,
             storage,
             states: RwLock::new(states),
-            refresh_flights,
+            refresh_flights: Mutex::new(refresh_flights),
             last_live_refresh: Mutex::new(HashMap::new()),
             last_failed_refresh: Mutex::new(HashMap::new()),
             last_full_refresh_at: RwLock::new(None),
             refresh_timeout,
             settings,
         }
+    }
+
+    pub fn register_provider(&self, provider_id: &str) {
+        let cached = load_cached_state(&self.storage, &self.registry, provider_id);
+        if let Ok(mut states) = self.states.write() {
+            states.entry(provider_id.to_owned()).or_insert(cached);
+        }
+        if let Ok(mut flights) = self.refresh_flights.lock() {
+            flights
+                .entry(provider_id.to_owned())
+                .or_insert_with(|| Arc::new(RefreshFlight::new()));
+        }
+    }
+
+    pub fn unregister_provider(&self, provider_id: &str) {
+        if let Ok(mut states) = self.states.write() {
+            states.remove(provider_id);
+        }
+        if let Ok(mut flights) = self.refresh_flights.lock() {
+            flights.remove(provider_id);
+        }
+        if let Ok(mut last) = self.last_live_refresh.lock() {
+            last.remove(provider_id);
+        }
+        if let Ok(mut failures) = self.last_failed_refresh.lock() {
+            failures.remove(provider_id);
+        }
+    }
+
+    fn refresh_flight(&self, provider_id: &str) -> Option<Arc<RefreshFlight>> {
+        self.refresh_flights.lock().ok().map(|mut flights| {
+            flights
+                .entry(provider_id.to_owned())
+                .or_insert_with(|| Arc::new(RefreshFlight::new()))
+                .clone()
+        })
     }
 
     pub fn state(&self) -> UsageViewState {
@@ -152,7 +174,7 @@ impl ProviderService {
             );
             return self.provider_state(provider_id);
         }
-        let Some(flight) = self.refresh_flights.get(provider_id).cloned() else {
+        let Some(flight) = self.refresh_flight(provider_id) else {
             return self.provider_state(provider_id);
         };
         let mut completed = flight.completed_tx.subscribe();
@@ -286,6 +308,20 @@ impl ProviderService {
                     started.elapsed().as_millis(),
                     error.kind()
                 ),
+            }
+            if self.registry.runtime(&provider_id).is_none() {
+                crate::app_debug!(
+                    &tag,
+                    "provider was removed during refresh; discarding result"
+                );
+                if let Ok(mut flight_state) = flight.state.lock() {
+                    flight_state.completed_generation =
+                        flight_state.requested_generation.max(generation);
+                    flight_state.attempt_generation = None;
+                    flight_state.runner_active = false;
+                }
+                flight.completed_tx.send_replace(generation);
+                return;
             }
             let state = self.apply_refresh_result(&provider_id, refresh_result);
             if state.error.is_none() {
@@ -517,6 +553,27 @@ impl ProviderService {
     fn update_state(&self, provider_id: &str, update: impl FnOnce(&mut ProviderViewState)) {
         if let Ok(mut states) = self.states.write() {
             update(states.entry(provider_id.to_owned()).or_default());
+        }
+    }
+}
+
+fn load_cached_state(
+    storage: &Storage,
+    registry: &ProviderRegistry,
+    id: &str,
+) -> ProviderViewState {
+    match storage.load_snapshot_for_identity(id, registry.cache_identity(id).as_borrowed()) {
+        Ok(Some(snapshot)) => {
+            crate::app_debug!("cache", "loaded cached snapshot for {id}");
+            ProviderViewState::from_cache(snapshot)
+        }
+        Ok(None) => ProviderViewState::default(),
+        Err(error) => {
+            crate::app_warn!(
+                "cache",
+                "cached snapshot for {id} could not be loaded: {error}"
+            );
+            ProviderViewState::default()
         }
     }
 }
@@ -936,11 +993,14 @@ mod tests {
     }
 
     fn refresh_runner_is_idle(service: &ProviderService, provider_id: &str) -> bool {
-        service
+        let flight = service
             .refresh_flights
-            .get(provider_id)
-            .and_then(|flight| flight.state.lock().ok())
-            .is_some_and(|state| !state.runner_active)
+            .lock()
+            .ok()
+            .and_then(|flights| flights.get(provider_id).cloned());
+        flight
+            .and_then(|flight| flight.state.lock().ok().map(|state| !state.runner_active))
+            .unwrap_or(false)
     }
 
     #[test]
@@ -1264,9 +1324,17 @@ mod tests {
                     loop {
                         let queued = service
                             .refresh_flights
-                            .get("slow")
-                            .and_then(|flight| flight.state.lock().ok())
-                            .is_some_and(|state| state.requested_generation >= 2);
+                            .lock()
+                            .ok()
+                            .and_then(|flights| flights.get("slow").cloned())
+                            .and_then(|flight| {
+                                flight
+                                    .state
+                                    .lock()
+                                    .ok()
+                                    .map(|state| state.requested_generation >= 2)
+                            })
+                            .unwrap_or(false);
                         if queued && active.load(Ordering::SeqCst) == 1 {
                             break;
                         }
@@ -1296,7 +1364,14 @@ mod tests {
             );
         }
         {
-            let flight_state = service.refresh_flights["slow"].state.lock().unwrap();
+            let slow_flight = service
+                .refresh_flights
+                .lock()
+                .unwrap()
+                .get("slow")
+                .cloned()
+                .unwrap();
+            let flight_state = slow_flight.state.lock().unwrap();
             assert!(flight_state.runner_active);
             assert_eq!(flight_state.attempt_generation, None);
             assert_eq!(flight_state.completed_generation, 2);
@@ -1656,5 +1731,65 @@ mod tests {
             .lock()
             .unwrap()
             .contains_key("recovering"));
+    }
+
+    struct DynamicAccountProvider {
+        id: String,
+    }
+
+    impl UsageProvider for DynamicAccountProvider {
+        fn definition(&self) -> ProviderDefinition {
+            let mut def = test_definition(&self.id);
+            def.fallback_enabled = false;
+            def
+        }
+
+        fn has_local_credentials(&self) -> bool {
+            true
+        }
+
+        fn is_removable_account(&self) -> bool {
+            true
+        }
+
+        fn refresh(&self) -> Result<ProviderSnapshot, ProviderError> {
+            Ok(test_snapshot(&self.id))
+        }
+    }
+
+    #[test]
+    fn service_hot_registers_refreshes_and_unregisters_dynamic_account_provider() {
+        let directory = tempdir().unwrap();
+        let storage = Arc::new(Storage::open(&directory.path().join("openquota.db")).unwrap());
+        let base_calls = Arc::new(AtomicUsize::new(0));
+        let base = Arc::new(SequenceProvider {
+            id: "antigravity",
+            calls: base_calls,
+            failures_before_success: 0,
+        }) as Arc<dyn UsageProvider>;
+        let registry = Arc::new(ProviderRegistry::new(vec![base]).unwrap());
+        let service = Arc::new(ProviderService::new(registry.clone(), storage));
+
+        let dynamic = Arc::new(DynamicAccountProvider {
+            id: "antigravity@1234abcd".into(),
+        }) as Arc<dyn UsageProvider>;
+        registry.register(dynamic).unwrap();
+        service.register_provider("antigravity@1234abcd");
+
+        let refreshed =
+            tauri::async_runtime::block_on(service.refresh("antigravity@1234abcd", true));
+        assert!(refreshed.error.is_none());
+        assert!(refreshed.snapshot.is_some());
+        assert!(service
+            .state()
+            .providers
+            .contains_key("antigravity@1234abcd"));
+
+        registry.unregister("antigravity@1234abcd").unwrap();
+        service.unregister_provider("antigravity@1234abcd");
+        assert!(!service
+            .state()
+            .providers
+            .contains_key("antigravity@1234abcd"));
     }
 }

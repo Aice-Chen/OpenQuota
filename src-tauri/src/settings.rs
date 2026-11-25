@@ -592,7 +592,7 @@ impl SettingsService {
             .find(|provider| provider.id == provider_id)
             .ok_or_else(|| "Provider settings are unavailable.".to_owned())?;
         provider.expanded = false;
-        provider.metrics = default_provider(definition, provider.detected).metrics;
+        provider.metrics = default_provider(&definition, provider.detected).metrics;
         self.update_from_view(
             settings,
             expected_settings_revision,
@@ -640,11 +640,92 @@ impl SettingsService {
         Ok(next)
     }
 
+    pub fn register_account_provider(
+        &self,
+        provider_id: &str,
+        custom_name: Option<&str>,
+        detected: bool,
+    ) -> Result<AppSettings, String> {
+        let mut current = self
+            .settings
+            .write()
+            .map_err(|_| "OpenQuota settings are temporarily unavailable.".to_owned())?;
+        let mut next = current.clone();
+        let mut detected_set = detected_provider_set(&current);
+        if detected {
+            detected_set.insert(provider_id.to_owned());
+        }
+        let persisted_accounts = persisted_account_provider_ids(&self.storage)
+            .map_err(|_| "OpenQuota account settings could not be loaded.".to_owned())?;
+        normalize_with_persisted_accounts(
+            &self.registry,
+            &mut next,
+            &detected_set,
+            &persisted_accounts,
+        );
+        if let Some(provider) = next
+            .providers
+            .iter_mut()
+            .find(|provider| provider.id == provider_id)
+        {
+            provider.enabled = true;
+            provider.detected = detected;
+        }
+        if let Some(name) = custom_name
+            .map(|value| value.trim().chars().take(48).collect::<String>())
+            .filter(|value| !value.is_empty())
+        {
+            next.provider_names.insert(provider_id.to_owned(), name);
+        }
+        self.storage
+            .save_settings(&next)
+            .map_err(|_| "OpenQuota settings could not be saved.".to_owned())?;
+        current.clone_from(&next);
+        self.enablement_revision.fetch_add(1, Ordering::SeqCst);
+        self.credential_revision.fetch_add(1, Ordering::SeqCst);
+        self.settings_revision.fetch_add(1, Ordering::SeqCst);
+        self.account_revision.fetch_add(1, Ordering::SeqCst);
+        Ok(next)
+    }
+
+    pub fn unregister_account_provider(&self, provider_id: &str) -> Result<AppSettings, String> {
+        let mut current = self
+            .settings
+            .write()
+            .map_err(|_| "OpenQuota settings are temporarily unavailable.".to_owned())?;
+        let mut next = current.clone();
+        next.providers.retain(|provider| provider.id != provider_id);
+        next.known_provider_ids.retain(|id| id != provider_id);
+        next.provider_names.remove(provider_id);
+        let mut detected_set = detected_provider_set(&next);
+        detected_set.remove(provider_id);
+        let persisted_accounts = persisted_account_provider_ids(&self.storage)
+            .map_err(|_| "OpenQuota account settings could not be loaded.".to_owned())?;
+        normalize_with_persisted_accounts(
+            &self.registry,
+            &mut next,
+            &detected_set,
+            &persisted_accounts,
+        );
+        self.storage
+            .save_settings(&next)
+            .map_err(|_| "OpenQuota settings could not be saved.".to_owned())?;
+        current.clone_from(&next);
+        if let Ok(mut active) = self.active_account_identities.write() {
+            active.remove(provider_id);
+        }
+        self.enablement_revision.fetch_add(1, Ordering::SeqCst);
+        self.credential_revision.fetch_add(1, Ordering::SeqCst);
+        self.settings_revision.fetch_add(1, Ordering::SeqCst);
+        self.account_revision.fetch_add(1, Ordering::SeqCst);
+        Ok(next)
+    }
+
     pub fn default_settings(&self, detected: &HashSet<String>) -> AppSettings {
         default_settings(&self.registry, detected)
     }
 
-    pub fn catalog(&self) -> &ProviderCatalog {
+    pub fn catalog(&self) -> ProviderCatalog {
         self.registry.catalog()
     }
 
@@ -661,6 +742,16 @@ impl SettingsService {
     ) -> SettingsViewState {
         let (settings, settings_revision, account_revision) = self.get_with_revisions();
         let mut renamable_provider_ids = self.registry.observed_account_provider_ids();
+        for provider in &self.registry.catalog().providers {
+            if self
+                .registry
+                .supports_multi_account_management(&provider.id)
+                && self.registry.supports_account_names(&provider.id)
+                && !renamable_provider_ids.contains(&provider.id)
+            {
+                renamable_provider_ids.push(provider.id.clone());
+            }
+        }
         if let Ok(stored_ids) = self.storage.load_observed_account_provider_ids() {
             for provider_id in stored_ids {
                 if self.registry.supports_account_names(&provider_id)
@@ -831,7 +922,7 @@ fn normalize_with_persisted_accounts(
         let mut provider = default_provider(definition, is_detected);
         provider.enabled = !was_known && is_detected;
         settings.known_provider_ids.push(definition.id.clone());
-        if crate::providers::is_claude_account_provider_id(&provider.id) {
+        if crate::providers::is_account_provider_id(&provider.id) {
             let family = crate::providers::provider_family(&provider.id);
             let index = normalized
                 .iter()
@@ -2350,5 +2441,84 @@ mod tests {
         assert!(!openrouter.detected);
         assert!(openrouter.enabled);
         assert_eq!(service.credential_revision.load(Ordering::SeqCst), 1);
+    }
+
+    struct DynamicSettingsAccountProvider {
+        id: String,
+    }
+
+    impl crate::providers::UsageProvider for DynamicSettingsAccountProvider {
+        fn definition(&self) -> ProviderDefinition {
+            crate::providers::antigravity::definition_for(&self.id, "Antigravity")
+        }
+
+        fn has_local_credentials(&self) -> bool {
+            true
+        }
+
+        fn supports_account_names(&self) -> bool {
+            true
+        }
+
+        fn is_removable_account(&self) -> bool {
+            true
+        }
+
+        fn account_identity(&self) -> Option<&str> {
+            Some("identity-work")
+        }
+
+        fn refresh(
+            &self,
+        ) -> Result<crate::models::ProviderSnapshot, crate::providers::ProviderError> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn settings_registers_and_unregisters_dynamic_account_provider_next_to_family() {
+        let directory = tempdir().unwrap();
+        let storage = Arc::new(Storage::open(&directory.path().join("openquota.db")).unwrap());
+        let registry = catalog();
+        let service = SettingsService::new_for_test(
+            storage,
+            registry.clone(),
+            &HashSet::from(["antigravity".to_owned()]),
+        )
+        .unwrap();
+
+        let account_id = "antigravity@1234abcd";
+        registry
+            .register(Arc::new(DynamicSettingsAccountProvider {
+                id: account_id.into(),
+            }))
+            .unwrap();
+        let added = service
+            .register_account_provider(account_id, Some("Work"), true)
+            .unwrap();
+        let ag_index = added
+            .providers
+            .iter()
+            .position(|provider| provider.id == "antigravity")
+            .unwrap();
+        let account_index = added
+            .providers
+            .iter()
+            .position(|provider| provider.id == account_id)
+            .unwrap();
+        assert_eq!(account_index, ag_index + 1);
+        assert!(added.providers[account_index].enabled);
+        assert_eq!(
+            added.provider_names.get(account_id).map(String::as_str),
+            Some("Work")
+        );
+
+        registry.unregister(account_id).unwrap();
+        let removed = service.unregister_account_provider(account_id).unwrap();
+        assert!(!removed
+            .providers
+            .iter()
+            .any(|provider| provider.id == account_id));
+        assert!(!removed.provider_names.contains_key(account_id));
     }
 }

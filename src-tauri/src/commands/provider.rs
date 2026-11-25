@@ -1,28 +1,29 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 use zeroize::Zeroizing;
 
 use crate::{
-    commands::settings::settings_view_state,
+    commands::{bootstrap::BootstrapState, settings::settings_view_state},
     models::{ApiKeyMutationOutcome, ApiKeyStatus, ProviderApiKeyState, ProviderLink},
     notifications::finish_refresh,
     pacing::NotificationEvaluator,
-    providers::{ProviderRegistry, UsageProvider},
+    providers::{antigravity, provider_family, ProviderRegistry, UsageProvider},
     service::ProviderService,
     settings::SettingsService,
-    tray_presentation,
+    storage::Storage,
+    tray_presentation, AppDataDir,
 };
 
-fn resolve_provider_link<'a>(
-    registry: &'a ProviderRegistry,
+fn resolve_provider_link(
+    registry: &ProviderRegistry,
     provider_id: &str,
     link_index: usize,
-) -> Result<&'a ProviderLink, String> {
+) -> Result<ProviderLink, String> {
     registry
         .definition(provider_id)
-        .and_then(|provider| provider.links.get(link_index))
+        .and_then(|provider| provider.links.get(link_index).cloned())
         .ok_or_else(|| "That provider link is unavailable.".to_owned())
 }
 
@@ -285,6 +286,170 @@ pub async fn delete_provider_api_key(
     })
 }
 
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn add_provider_account(
+    app: AppHandle,
+    registry: State<'_, Arc<ProviderRegistry>>,
+    service: State<'_, Arc<ProviderService>>,
+    settings: State<'_, Arc<SettingsService>>,
+    storage: State<'_, Arc<Storage>>,
+    app_data_dir: State<'_, AppDataDir>,
+    notifications: State<'_, Arc<NotificationEvaluator>>,
+    provider_id: String,
+    label: Option<String>,
+    credential: Option<String>,
+) -> Result<BootstrapState, String> {
+    if !registry.supports_multi_account_management(&provider_id) {
+        return Err("That provider does not support managing additional accounts.".to_owned());
+    }
+    let family = provider_family(&provider_id).to_owned();
+    if family != "antigravity" {
+        return Err("That provider does not support managing additional accounts.".to_owned());
+    }
+
+    let credential = credential.map(Zeroizing::new);
+    let credential_guard = settings.lock_credential_mutation().await;
+    let command_guard = settings.lock_command_mutation().await;
+    settings.record_provider_credential_mutation();
+
+    let existing_ids = registry
+        .catalog()
+        .providers
+        .into_iter()
+        .map(|provider| provider.id)
+        .collect::<HashSet<_>>();
+    let storage_for_add = storage.inner().clone();
+    let data_dir_for_add = app_data_dir.0.clone();
+    let added = tauri::async_runtime::spawn_blocking(move || {
+        antigravity::create_account(
+            &storage_for_add,
+            &data_dir_for_add,
+            &existing_ids,
+            label.as_deref(),
+            credential.as_ref().map(|value| value.as_str()),
+        )
+    })
+    .await
+    .map_err(|_| "Account metadata could not be saved.".to_owned())??;
+
+    let added_provider_id = added.provider_id.clone();
+    let catalog = match registry.register(added.runtime) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            let _ = antigravity::remove_account(&storage, &app_data_dir.0, &added_provider_id);
+            return Err(error.to_string());
+        }
+    };
+    service.register_provider(&added_provider_id);
+    let updated_settings = match settings.register_account_provider(
+        &added_provider_id,
+        added.custom_name.as_deref(),
+        true,
+    ) {
+        Ok(updated) => updated,
+        Err(error) => {
+            let _ = registry.unregister(&added_provider_id);
+            service.unregister_provider(&added_provider_id);
+            let _ = antigravity::remove_account(&storage, &app_data_dir.0, &added_provider_id);
+            return Err(error);
+        }
+    };
+
+    let usage = service.state();
+    let settings_view = settings_view_state(&app, &settings);
+    tray_presentation::update(&app, &usage, &updated_settings, settings.registry());
+    let _ = app.emit("catalog-state", &catalog);
+    let _ = app.emit("settings-state", &settings_view);
+    let _ = app.emit("usage-state", &usage);
+    drop(command_guard);
+    drop(credential_guard);
+
+    let refresh_app = app.clone();
+    let refresh_service = service.inner().clone();
+    let refresh_settings = settings.inner().clone();
+    let refresh_notifications = notifications.inner().clone();
+    let refresh_provider_id = added_provider_id.clone();
+    tauri::async_runtime::spawn(async move {
+        refresh_service.refresh(&refresh_provider_id, true).await;
+        let next_usage = refresh_service.state();
+        let _ = refresh_app.emit("usage-state", &next_usage);
+        finish_refresh(
+            &refresh_app,
+            &next_usage,
+            &refresh_settings,
+            &refresh_notifications,
+        );
+    });
+
+    crate::app_info!("config", "added account provider {added_provider_id}");
+    Ok(BootstrapState {
+        usage,
+        settings: settings_view,
+        catalog,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn remove_provider_account(
+    app: AppHandle,
+    registry: State<'_, Arc<ProviderRegistry>>,
+    service: State<'_, Arc<ProviderService>>,
+    settings: State<'_, Arc<SettingsService>>,
+    storage: State<'_, Arc<Storage>>,
+    app_data_dir: State<'_, AppDataDir>,
+    notifications: State<'_, Arc<NotificationEvaluator>>,
+    provider_id: String,
+) -> Result<BootstrapState, String> {
+    if !registry.is_removable_account(&provider_id) {
+        return Err("That account cannot be removed.".to_owned());
+    }
+    if provider_family(&provider_id) != "antigravity" {
+        return Err("That account cannot be removed.".to_owned());
+    }
+
+    let credential_guard = settings.lock_credential_mutation().await;
+    let command_guard = settings.lock_command_mutation().await;
+    settings.record_provider_credential_mutation();
+
+    let storage_for_remove = storage.inner().clone();
+    let data_dir_for_remove = app_data_dir.0.clone();
+    let provider_for_remove = provider_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        antigravity::remove_account(
+            &storage_for_remove,
+            &data_dir_for_remove,
+            &provider_for_remove,
+        )
+    })
+    .await
+    .map_err(|_| "Account metadata could not be removed.".to_owned())??;
+
+    let catalog = registry
+        .unregister(&provider_id)
+        .map_err(|error| error.to_string())?;
+    service.unregister_provider(&provider_id);
+    let updated_settings = settings.unregister_account_provider(&provider_id)?;
+    notifications.prune(&updated_settings);
+
+    let usage = service.state();
+    let settings_view = settings_view_state(&app, &settings);
+    tray_presentation::update(&app, &usage, &updated_settings, settings.registry());
+    let _ = app.emit("catalog-state", &catalog);
+    let _ = app.emit("settings-state", &settings_view);
+    let _ = app.emit("usage-state", &usage);
+    drop(command_guard);
+    drop(credential_guard);
+
+    crate::app_info!("config", "removed account provider {provider_id}");
+    Ok(BootstrapState {
+        usage,
+        settings: settings_view,
+        catalog,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -323,7 +488,7 @@ mod tests {
 
     impl UsageProvider for MutatingProvider {
         fn definition(&self) -> ProviderDefinition {
-            registry().definition("provider").unwrap().clone()
+            registry().definition("provider").unwrap()
         }
 
         fn has_local_credentials(&self) -> bool {

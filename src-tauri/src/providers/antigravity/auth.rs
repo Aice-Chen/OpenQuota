@@ -10,7 +10,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
-use crate::providers::credential_store::{decode_go_keyring_value, read_generic_password};
+use crate::providers::credential_store::{
+    decode_go_keyring_value, delete_owned_password, read_generic_password, read_owned_password,
+    write_owned_password,
+};
 
 use super::AntigravityError;
 
@@ -18,6 +21,8 @@ const ACCESS_TOKEN_CACHE_VERSION: u8 = 1;
 const ACCESS_TOKEN_CACHE_LIMIT: u64 = 64 * 1024;
 const ACCESS_TOKEN_EXPIRY_BUFFER_MILLIS: i64 = 60_000;
 const DEFAULT_ACCESS_TOKEN_LIFETIME_SECONDS: f64 = 3_600.0;
+const OWNED_ACCOUNT_SERVICE: &str = "io.github.deviffyy.openquota.antigravity-account";
+const MIN_MANUAL_TOKEN_LENGTH: usize = 16;
 
 #[derive(Debug, Clone)]
 pub struct AntigravityToken {
@@ -123,7 +128,21 @@ impl AccessTokenCache {
 }
 
 pub fn load_token() -> Result<Option<AntigravityToken>, AntigravityError> {
-    let Some(raw) = read_generic_password("gemini", "antigravity")
+    let Some(raw) = read_default_raw_credential()? else {
+        return Ok(None);
+    };
+    extract_token(&raw)
+        .map(Some)
+        .ok_or(AntigravityError::InvalidCredentialData)
+}
+
+pub fn read_default_raw_credential() -> Result<Option<Vec<u8>>, AntigravityError> {
+    read_generic_password("gemini", "antigravity")
+        .map_err(|_| AntigravityError::CredentialStoreUnreadable)
+}
+
+pub fn load_account_token(provider_id: &str) -> Result<Option<AntigravityToken>, AntigravityError> {
+    let Some(raw) = read_owned_password(OWNED_ACCOUNT_SERVICE, provider_id)
         .map_err(|_| AntigravityError::CredentialStoreUnreadable)?
     else {
         return Ok(None);
@@ -133,8 +152,62 @@ pub fn load_token() -> Result<Option<AntigravityToken>, AntigravityError> {
         .ok_or(AntigravityError::InvalidCredentialData)
 }
 
+pub fn save_account_credential(provider_id: &str, raw: &[u8]) -> Result<(), String> {
+    write_owned_password(OWNED_ACCOUNT_SERVICE, provider_id, raw)
+        .map_err(|_| "Account credentials could not be saved to secure storage.".to_owned())
+}
+
+pub fn delete_account_credential(provider_id: &str) -> Result<(), String> {
+    delete_owned_password(OWNED_ACCOUNT_SERVICE, provider_id)
+        .map_err(|_| "Account credentials could not be removed from secure storage.".to_owned())
+}
+
 pub fn has_local_credentials() -> bool {
     credential_state_is_actionable(load_token())
+}
+
+pub fn has_account_credentials(provider_id: &str) -> bool {
+    credential_state_is_actionable(load_account_token(provider_id))
+}
+
+pub fn normalize_manual_credential(input: &str) -> Option<(AntigravityToken, Vec<u8>)> {
+    let trimmed = input.trim().trim_start_matches('\u{feff}').trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with('{')
+        || trimmed.starts_with('[')
+        || trimmed.starts_with("go-keyring-base64:")
+    {
+        let raw = trimmed.as_bytes().to_vec();
+        let token = extract_token(&raw)?;
+        return Some((token, raw));
+    }
+    let stripped = trimmed
+        .strip_prefix("Bearer ")
+        .or_else(|| trimmed.strip_prefix("bearer "))
+        .unwrap_or(trimmed)
+        .trim();
+    if stripped.len() < MIN_MANUAL_TOKEN_LENGTH || stripped.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let payload = if stripped.starts_with("1//") {
+        serde_json::json!({ "refresh_token": stripped })
+    } else {
+        serde_json::json!({ "access_token": stripped })
+    };
+    let raw = serde_json::to_vec(&payload).ok()?;
+    let token = extract_token(&raw)?;
+    Some((token, raw))
+}
+
+pub fn token_identity(token: &AntigravityToken) -> Option<String> {
+    let secret = token
+        .refresh_token
+        .as_deref()
+        .and_then(non_empty)
+        .or_else(|| token.access_token.as_deref().and_then(non_empty))?;
+    Some(crate::hashing::sha256_hex(secret.as_bytes()))
 }
 
 fn credential_state_is_actionable(
@@ -420,5 +493,37 @@ mod tests {
             fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn manual_credential_normalizes_refresh_tokens_json_and_rejects_junk() {
+        let (refresh, raw) =
+            super::normalize_manual_credential("1//0gExampleRefreshToken123456").unwrap();
+        assert_eq!(
+            refresh.refresh_token.as_deref(),
+            Some("1//0gExampleRefreshToken123456")
+        );
+        assert!(refresh.access_token.is_none());
+        assert!(extract_token(&raw).unwrap().refresh_token.is_some());
+
+        let (json_token, _) = super::normalize_manual_credential(
+            r#"{"refresh_token":"1//0gJsonRefresh","access_token":"ya29.access"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            json_token.refresh_token.as_deref(),
+            Some("1//0gJsonRefresh")
+        );
+        assert_eq!(json_token.access_token.as_deref(), Some("ya29.access"));
+
+        let id_a = super::token_identity(&refresh).unwrap();
+        let id_b = super::token_identity(&json_token).unwrap();
+        assert_ne!(id_a, id_b);
+        assert_eq!(id_a.len(), 64);
+
+        assert!(super::normalize_manual_credential("").is_none());
+        assert!(super::normalize_manual_credential("short").is_none());
+        assert!(super::normalize_manual_credential("not a valid token").is_none());
+        assert!(super::normalize_manual_credential("{}").is_none());
     }
 }

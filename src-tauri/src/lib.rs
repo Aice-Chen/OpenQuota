@@ -27,11 +27,13 @@ mod window;
 #[cfg(any(target_os = "linux", test))]
 mod xdg_autostart;
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use popup::PopupDismissGuard;
 use service::ProviderService;
 use settings::{CredentialDetectionPlan, SettingsService};
+
+pub(crate) struct AppDataDir(pub PathBuf);
 #[cfg(not(target_os = "linux"))]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::{
@@ -48,11 +50,21 @@ use crate::{
     pacing::NotificationEvaluator,
     pricing::PricingStore,
     providers::{
-        antigravity::AntigravityProvider, claude, codex::reset_claim::CodexResetClaimService,
-        codex::CodexProvider, copilot::CopilotProvider, cursor::CursorProvider,
-        detect_local_credentials, devin::DevinProvider, grok::GrokProvider, kimi::KimiProvider,
-        minimax::MiniMaxProvider, opencode::OpenCodeProvider, openrouter::OpenRouterProvider,
-        zai::ZaiProvider, ProviderRegistry, UsageProvider,
+        antigravity::{self, AntigravityProvider},
+        claude,
+        codex::reset_claim::CodexResetClaimService,
+        codex::CodexProvider,
+        copilot::CopilotProvider,
+        cursor::CursorProvider,
+        detect_local_credentials,
+        devin::DevinProvider,
+        grok::GrokProvider,
+        kimi::KimiProvider,
+        minimax::MiniMaxProvider,
+        opencode::OpenCodeProvider,
+        openrouter::OpenRouterProvider,
+        zai::ZaiProvider,
+        ProviderRegistry, UsageProvider,
     },
     storage::Storage,
     window::{
@@ -417,6 +429,10 @@ pub fn run() {
                 Arc::new(KimiProvider::new()?) as Arc<dyn UsageProvider>,
                 Arc::new(MiniMaxProvider::new()?) as Arc<dyn UsageProvider>,
             ]);
+            providers.extend(antigravity::saved_account_runtimes(
+                &storage,
+                &app_data_dir,
+            )?);
             let registry = Arc::new(ProviderRegistry::new(providers)?);
             let (settings_service, credential_detection_plan) =
                 SettingsService::new_deferred(storage.clone(), registry.clone())?;
@@ -435,6 +451,8 @@ pub fn run() {
                 logging::current_level().log_label()
             );
             let notifications = Arc::new(NotificationEvaluator::default());
+            app.manage(AppDataDir(app_data_dir));
+            app.manage(storage);
             app.manage(registry.clone());
             app.manage(service.clone());
             app.manage(settings.clone());
@@ -526,6 +544,8 @@ pub fn run() {
             commands::provider::get_provider_api_key_state,
             commands::provider::save_provider_api_key,
             commands::provider::delete_provider_api_key,
+            commands::provider::add_provider_account,
+            commands::provider::remove_provider_account,
             commands::usage::refresh_usage,
             commands::usage::refresh_provider_usage,
             commands::usage::claim_codex_reset_credit,

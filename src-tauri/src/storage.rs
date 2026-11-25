@@ -429,6 +429,38 @@ impl Storage {
         Ok(())
     }
 
+    pub fn delete_provider_account_record(
+        &self,
+        provider_family: &str,
+        provider_id: &str,
+    ) -> Result<(), StorageError> {
+        self.connection()?.execute(
+            "DELETE FROM provider_account_records
+             WHERE provider_family = ?1 AND provider_id = ?2",
+            params![provider_family, provider_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_snapshot(&self, provider_id: &str) -> Result<(), StorageError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM provider_snapshots WHERE provider_id = ?1",
+            [provider_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM daily_usage WHERE provider_id = ?1",
+            [provider_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM log_file_cache WHERE provider_id = ?1",
+            [provider_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn load_panel_height(&self) -> Result<Option<u32>, StorageError> {
         let connection = self.connection()?;
         let height = connection
@@ -845,5 +877,50 @@ mod tests {
         storage
             .save_log_events("codex", PathBuf::from("new.jsonl").as_path(), 10, 20, "[]")
             .unwrap();
+    }
+
+    #[test]
+    fn deleting_account_record_and_snapshot_clears_both_tables() {
+        let directory = tempdir().unwrap();
+        let storage = Storage::open(&directory.path().join("openquota.db")).unwrap();
+        let snapshot = ProviderSnapshot {
+            provider_id: "antigravity@1234abcd".into(),
+            plan: Some("Pro".into()),
+            quotas: Vec::new(),
+            value_metrics: Vec::new(),
+            status_metrics: Vec::new(),
+            notices: Vec::new(),
+            usage: UsageHistory::default(),
+            warnings: Vec::new(),
+            refreshed_at: Utc::now(),
+        };
+        storage
+            .save_provider_account_record(
+                "antigravity",
+                "identity-a",
+                "antigravity@1234abcd",
+                r#"{"displayName":"Antigravity"}"#,
+            )
+            .unwrap();
+        storage
+            .save_snapshot_for_identity(&snapshot, Some("identity-a"))
+            .unwrap();
+
+        storage
+            .delete_provider_account_record("antigravity", "antigravity@1234abcd")
+            .unwrap();
+        storage.delete_snapshot("antigravity@1234abcd").unwrap();
+
+        assert!(storage
+            .load_provider_account_records("antigravity")
+            .unwrap()
+            .is_empty());
+        assert!(storage
+            .load_snapshot_for_identity(
+                "antigravity@1234abcd",
+                CacheIdentity::Resolved("identity-a")
+            )
+            .unwrap()
+            .is_none());
     }
 }

@@ -1,11 +1,11 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 use crate::models::{MetricSection, MetricSource, ProviderCatalog, ProviderDefinition};
 
-use super::{CacheIdentity, UsageProvider};
+use super::{is_account_provider_id, provider_family, OwnedCacheIdentity, UsageProvider};
 
 const MAX_DEFAULT_PINS: usize = 2;
 
@@ -17,11 +17,15 @@ pub enum ProviderRegistryError {
     Invalid(String),
 }
 
-pub struct ProviderRegistry {
+struct RegistryState {
     runtimes: HashMap<String, Arc<dyn UsageProvider>>,
     catalog: ProviderCatalog,
     definition_indices: HashMap<String, usize>,
     metric_indices: HashMap<String, (usize, usize)>,
+}
+
+pub struct ProviderRegistry {
+    state: RwLock<RegistryState>,
 }
 
 impl ProviderRegistry {
@@ -32,18 +36,10 @@ impl ProviderRegistry {
 
         let mut runtimes = HashMap::new();
         let mut definitions = Vec::with_capacity(providers.len());
-        let mut definition_indices = HashMap::new();
-        let mut metric_indices = HashMap::new();
         let mut metric_owners = BTreeMap::<String, String>::new();
-        let mut api_key_provider_ids = Vec::new();
 
         for provider in providers {
-            let mut definition = provider.definition();
-            definition.links = definition
-                .links
-                .iter()
-                .filter_map(crate::models::ProviderLink::visible)
-                .collect();
+            let definition = normalized_definition(provider.as_ref());
             if runtimes.contains_key(&definition.id) {
                 return Err(invalid(format!(
                     "duplicate provider id `{}`",
@@ -51,14 +47,8 @@ impl ProviderRegistry {
                 )));
             }
             validate_definition(&definition, &metric_owners)?;
-            let provider_index = definitions.len();
-            definition_indices.insert(definition.id.clone(), provider_index);
-            for (metric_index, metric) in definition.metrics.iter().enumerate() {
+            for metric in &definition.metrics {
                 metric_owners.insert(metric.id.clone(), definition.id.clone());
-                metric_indices.insert(metric.id.clone(), (provider_index, metric_index));
-            }
-            if provider.supports_api_key_configuration() {
-                api_key_provider_ids.push(definition.id.clone());
             }
             runtimes.insert(definition.id.clone(), provider);
             definitions.push(definition);
@@ -70,50 +60,156 @@ impl ProviderRegistry {
             return Err(invalid("registry has no fallback-enabled provider"));
         }
 
-        Ok(Self {
+        let mut state = RegistryState {
             runtimes,
             catalog: ProviderCatalog {
                 providers: definitions,
-                api_key_provider_ids,
+                api_key_provider_ids: Vec::new(),
+                multi_account_provider_ids: Vec::new(),
+                removable_provider_ids: Vec::new(),
             },
-            definition_indices,
-            metric_indices,
+            definition_indices: HashMap::new(),
+            metric_indices: HashMap::new(),
+        };
+        rebuild_indices(&mut state);
+
+        Ok(Self {
+            state: RwLock::new(state),
         })
     }
 
-    pub fn catalog(&self) -> &ProviderCatalog {
-        &self.catalog
+    pub fn register(
+        &self,
+        provider: Arc<dyn UsageProvider>,
+    ) -> Result<ProviderCatalog, ProviderRegistryError> {
+        let definition = normalized_definition(provider.as_ref());
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| invalid("provider registry lock is unavailable"))?;
+        if state.runtimes.contains_key(&definition.id) {
+            return Err(invalid(format!(
+                "duplicate provider id `{}`",
+                definition.id
+            )));
+        }
+        let metric_owners = state
+            .catalog
+            .providers
+            .iter()
+            .flat_map(|existing| {
+                existing
+                    .metrics
+                    .iter()
+                    .map(|metric| (metric.id.clone(), existing.id.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        validate_definition(&definition, &metric_owners)?;
+
+        if is_account_provider_id(&definition.id) {
+            let family = provider_family(&definition.id);
+            let insert_at = state
+                .catalog
+                .providers
+                .iter()
+                .rposition(|existing| provider_family(&existing.id) == family)
+                .map_or(state.catalog.providers.len(), |index| index + 1);
+            state
+                .catalog
+                .providers
+                .insert(insert_at, definition.clone());
+        } else {
+            state.catalog.providers.push(definition.clone());
+        }
+        state.runtimes.insert(definition.id, provider);
+        rebuild_indices(&mut state);
+        Ok(state.catalog.clone())
+    }
+
+    pub fn unregister(&self, provider_id: &str) -> Result<ProviderCatalog, ProviderRegistryError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| invalid("provider registry lock is unavailable"))?;
+        let Some(runtime) = state.runtimes.get(provider_id) else {
+            return Err(invalid(format!("unknown provider id `{provider_id}`")));
+        };
+        if !runtime.is_removable_account() {
+            return Err(invalid(format!(
+                "provider `{provider_id}` cannot be removed"
+            )));
+        }
+        let has_remaining_fallback = state
+            .catalog
+            .providers
+            .iter()
+            .any(|definition| definition.id != provider_id && definition.fallback_enabled);
+        if !has_remaining_fallback {
+            return Err(invalid("registry has no fallback-enabled provider"));
+        }
+
+        state.runtimes.remove(provider_id);
+        state
+            .catalog
+            .providers
+            .retain(|definition| definition.id != provider_id);
+        rebuild_indices(&mut state);
+        Ok(state.catalog.clone())
+    }
+
+    pub fn catalog(&self) -> ProviderCatalog {
+        self.state
+            .read()
+            .map(|state| state.catalog.clone())
+            .unwrap_or_default()
     }
 
     pub fn runtime(&self, id: &str) -> Option<Arc<dyn UsageProvider>> {
-        self.runtimes.get(id).cloned()
+        self.state
+            .read()
+            .ok()
+            .and_then(|state| state.runtimes.get(id).cloned())
     }
 
-    pub fn definition(&self, id: &str) -> Option<&ProviderDefinition> {
-        self.definition_indices
-            .get(id)
-            .and_then(|index| self.catalog.providers.get(*index))
+    pub fn definition(&self, id: &str) -> Option<ProviderDefinition> {
+        let state = self.state.read().ok()?;
+        let index = *state.definition_indices.get(id)?;
+        state.catalog.providers.get(index).cloned()
     }
 
-    pub fn cache_identity(&self, id: &str) -> CacheIdentity<'_> {
-        self.runtimes
-            .get(id)
-            .map(|runtime| runtime.cache_identity())
-            .unwrap_or(CacheIdentity::Unscoped)
+    pub fn cache_identity(&self, id: &str) -> OwnedCacheIdentity {
+        let Some(runtime) = self.runtime(id) else {
+            return OwnedCacheIdentity::Unscoped;
+        };
+        OwnedCacheIdentity::from_borrowed(runtime.cache_identity())
     }
 
     pub fn supports_account_names(&self, id: &str) -> bool {
-        self.runtimes
-            .get(id)
+        self.runtime(id)
             .is_some_and(|runtime| runtime.supports_account_names())
     }
 
+    pub fn supports_multi_account_management(&self, id: &str) -> bool {
+        self.runtime(id)
+            .is_some_and(|runtime| runtime.supports_multi_account_management())
+    }
+
+    pub fn is_removable_account(&self, id: &str) -> bool {
+        self.runtime(id)
+            .is_some_and(|runtime| runtime.is_removable_account())
+    }
+
     pub fn observed_account_provider_ids(&self) -> Vec<String> {
-        self.catalog
+        let Ok(state) = self.state.read() else {
+            return Vec::new();
+        };
+        state
+            .catalog
             .providers
             .iter()
             .filter(|definition| {
-                self.runtimes
+                state
+                    .runtimes
                     .get(&definition.id)
                     .is_some_and(|runtime| runtime.account_identity().is_some())
             })
@@ -121,13 +217,16 @@ impl ProviderRegistry {
             .collect()
     }
 
-    pub fn metric(&self, id: &str) -> Option<&crate::models::MetricDefinition> {
-        let (provider_index, metric_index) = *self.metric_indices.get(id)?;
-        self.catalog
+    pub fn metric(&self, id: &str) -> Option<crate::models::MetricDefinition> {
+        let state = self.state.read().ok()?;
+        let (provider_index, metric_index) = *state.metric_indices.get(id)?;
+        state
+            .catalog
             .providers
             .get(provider_index)?
             .metrics
             .get(metric_index)
+            .cloned()
     }
 
     #[cfg(test)]
@@ -142,6 +241,55 @@ impl ProviderRegistry {
                 })
                 .collect(),
         )
+    }
+}
+
+fn normalized_definition(provider: &dyn UsageProvider) -> ProviderDefinition {
+    let mut definition = provider.definition();
+    definition.links = definition
+        .links
+        .iter()
+        .filter_map(crate::models::ProviderLink::visible)
+        .collect();
+    definition
+}
+
+fn rebuild_indices(state: &mut RegistryState) {
+    state.definition_indices.clear();
+    state.metric_indices.clear();
+    state.catalog.api_key_provider_ids.clear();
+    state.catalog.multi_account_provider_ids.clear();
+    state.catalog.removable_provider_ids.clear();
+
+    for (provider_index, definition) in state.catalog.providers.iter().enumerate() {
+        state
+            .definition_indices
+            .insert(definition.id.clone(), provider_index);
+        for (metric_index, metric) in definition.metrics.iter().enumerate() {
+            state
+                .metric_indices
+                .insert(metric.id.clone(), (provider_index, metric_index));
+        }
+        if let Some(runtime) = state.runtimes.get(&definition.id) {
+            if runtime.supports_api_key_configuration() {
+                state
+                    .catalog
+                    .api_key_provider_ids
+                    .push(definition.id.clone());
+            }
+            if runtime.supports_multi_account_management() {
+                state
+                    .catalog
+                    .multi_account_provider_ids
+                    .push(definition.id.clone());
+            }
+            if runtime.is_removable_account() {
+                state
+                    .catalog
+                    .removable_provider_ids
+                    .push(definition.id.clone());
+            }
+        }
     }
 }
 
@@ -595,5 +743,97 @@ mod tests {
             serialized["providers"][1]["metrics"][9]["source"],
             serde_json::json!({"kind":"usage","period":"last30Days"})
         );
+    }
+
+    struct RemovableAccountStub {
+        definition: ProviderDefinition,
+        multi_account: bool,
+        removable: bool,
+    }
+
+    impl UsageProvider for RemovableAccountStub {
+        fn definition(&self) -> ProviderDefinition {
+            self.definition.clone()
+        }
+
+        fn has_local_credentials(&self) -> bool {
+            true
+        }
+
+        fn supports_account_names(&self) -> bool {
+            true
+        }
+
+        fn supports_multi_account_management(&self) -> bool {
+            self.multi_account
+        }
+
+        fn is_removable_account(&self) -> bool {
+            self.removable
+        }
+
+        fn refresh(&self) -> Result<ProviderSnapshot, ProviderError> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn registry_hot_registers_and_unregisters_removable_account_providers() {
+        let mut base_ag = definition("antigravity");
+        base_ag.fallback_enabled = false;
+        let base_other = definition("codex");
+        let registry = ProviderRegistry::new(vec![
+            Arc::new(RemovableAccountStub {
+                definition: base_ag,
+                multi_account: true,
+                removable: false,
+            }),
+            runtime(base_other),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            registry.catalog().multi_account_provider_ids,
+            ["antigravity"]
+        );
+        assert!(registry.catalog().removable_provider_ids.is_empty());
+
+        let mut account_def = definition("antigravity@1234abcd");
+        account_def.fallback_enabled = false;
+        let catalog = registry
+            .register(Arc::new(RemovableAccountStub {
+                definition: account_def,
+                multi_account: false,
+                removable: true,
+            }))
+            .unwrap();
+        assert_eq!(
+            catalog
+                .providers
+                .iter()
+                .map(|provider| provider.id.as_str())
+                .collect::<Vec<_>>(),
+            ["antigravity", "antigravity@1234abcd", "codex"]
+        );
+        assert_eq!(catalog.removable_provider_ids, ["antigravity@1234abcd"]);
+        assert!(registry.metric("antigravity@1234abcd.session").is_some());
+
+        // Rejects removing base non-removable provider.
+        assert!(registry.unregister("antigravity").is_err());
+
+        // Removes added account provider cleanly and re-indexes remaining providers.
+        let after_remove = registry.unregister("antigravity@1234abcd").unwrap();
+        assert_eq!(
+            after_remove
+                .providers
+                .iter()
+                .map(|provider| provider.id.as_str())
+                .collect::<Vec<_>>(),
+            ["antigravity", "codex"]
+        );
+        assert!(after_remove.removable_provider_ids.is_empty());
+        assert!(registry.definition("antigravity@1234abcd").is_none());
+        assert!(registry.metric("antigravity@1234abcd.session").is_none());
+        assert!(registry.definition("codex").is_some());
     }
 }

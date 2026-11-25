@@ -179,6 +179,8 @@ export interface ProviderDefinition {
 export interface ProviderCatalog {
   providers: ProviderDefinition[];
   apiKeyProviderIds?: string[];
+  multiAccountProviderIds?: string[];
+  removableProviderIds?: string[];
 }
 
 export interface MetricLayout {

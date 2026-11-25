@@ -2,9 +2,16 @@
   import { onDestroy } from 'svelte';
   import { flip } from 'svelte/animate';
   import type { ProviderCatalogIndex } from './metrics';
-  import type { AppSettings, MetricLayout, MetricSection, ProviderLayout } from './types';
+  import type {
+    AppSettings,
+    BootstrapState,
+    MetricLayout,
+    MetricSection,
+    ProviderLayout,
+  } from './types';
   import Icon from './Icon.svelte';
   import { t, translateMetricLabel } from './i18n.svelte';
+  import ProviderAccountsSection from './ProviderAccountsSection.svelte';
   import ProviderApiKeySection from './ProviderApiKeySection.svelte';
   import ProviderNameSection from './ProviderNameSection.svelte';
   import { reorderFlip } from './motion';
@@ -18,6 +25,8 @@
     renamableProviderIds: string[];
     onChange: (settings: AppSettings) => void;
     onNameChange: (settings: AppSettings) => void;
+    onAccountAdded?: (bootstrap: BootstrapState) => void;
+    onAccountRemoved?: (bootstrap: BootstrapState, removedId: string) => void;
     onReorderStart: () => void;
     onReorderEnd: (moved: boolean, cancelled?: boolean) => void;
     reducedMotion: boolean;
@@ -29,6 +38,8 @@
     renamableProviderIds,
     onChange,
     onNameChange,
+    onAccountAdded,
+    onAccountRemoved,
     onReorderStart,
     onReorderEnd,
     reducedMotion,
@@ -229,6 +240,14 @@
     <ProviderApiKeySection
       providerId={provider.id}
       providerName={providerDisplayName(provider.id)}
+    />
+    <ProviderAccountsSection
+      providerId={provider.id}
+      providerName={providerDisplayName(provider.id)}
+      canAddAccount={catalog.supportsMultiAccount(provider.id)}
+      canRemoveAccount={catalog.isRemovable(provider.id)}
+      {onAccountAdded}
+      {onAccountRemoved}
     />
     {#if message}
       <div class:denied={messageKind === 'denied'} class="customization-pill" role="status">

@@ -230,14 +230,14 @@ fn resolved_groups(
                 .filter_map(|metric| {
                     let metric_definition = registry.metric(&metric.id)?;
                     let mut resolved = tray_metric_localized(
-                        metric_definition,
+                        &metric_definition,
                         snapshot,
                         settings.usage_display,
                         zh,
                     )?;
                     resolved.detail = format!(
                         "{} {}",
-                        settings.provider_display_name(definition),
+                        settings.provider_display_name(&definition),
                         resolved.detail
                     );
                     Some(resolved)
@@ -746,9 +746,9 @@ mod tests {
         let definition = catalog.metric("cursor.requests").unwrap();
 
         let left =
-            super::tray_metric(definition, &snapshot, crate::models::UsageDisplay::Left).unwrap();
+            super::tray_metric(&definition, &snapshot, crate::models::UsageDisplay::Left).unwrap();
         let used =
-            super::tray_metric(definition, &snapshot, crate::models::UsageDisplay::Used).unwrap();
+            super::tray_metric(&definition, &snapshot, crate::models::UsageDisplay::Used).unwrap();
 
         assert_eq!(left.value, "75");
         assert_eq!(left.detail, "Requests 75 searches left");
@@ -854,7 +854,7 @@ mod tests {
         };
         let catalog = ProviderRegistry::from_definitions(vec![codex::definition()]).unwrap();
         let metric = super::tray_metric(
-            catalog.metric("codex.credits").unwrap(),
+            &catalog.metric("codex.credits").unwrap(),
             &snapshot,
             crate::models::UsageDisplay::Left,
         )

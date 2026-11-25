@@ -5,6 +5,7 @@ import type {
   AppSettings,
   BootstrapState,
   ProviderApiKeyState,
+  ProviderCatalog,
   ResetClaimOutcome,
   SettingsViewState,
   UpdateProgress,
@@ -51,6 +52,18 @@ export function saveProviderApiKey(providerId: string, apiKey: string) {
 
 export function deleteProviderApiKey(providerId: string) {
   return invoke<ApiKeyMutationOutcome>('delete_provider_api_key', { providerId });
+}
+
+export function addProviderAccount(
+  providerId: string,
+  label: string | null,
+  credential: string | null,
+) {
+  return invoke<BootstrapState>('add_provider_account', { providerId, label, credential });
+}
+
+export function removeProviderAccount(providerId: string) {
+  return invoke<BootstrapState>('remove_provider_account', { providerId });
 }
 
 export function getAppSettings() {
@@ -171,6 +184,10 @@ export function onUsageState(handler: PayloadHandler<UsageViewState>) {
 
 export function onSettingsState(handler: PayloadHandler<SettingsViewState>) {
   return onEvent('settings-state', handler);
+}
+
+export function onCatalogState(handler: PayloadHandler<ProviderCatalog>) {
+  return onEvent('catalog-state', handler);
 }
 
 export function onOpenScreen(handler: PayloadHandler<string>) {

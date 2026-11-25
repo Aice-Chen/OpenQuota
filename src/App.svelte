@@ -9,6 +9,7 @@
     getPanelHeightMode,
     getPanelResizeEdge,
     lockPanelResizeAxis,
+    onCatalogState,
     onOpenScreen,
     onMainWindowHidden,
     onSettingsState,
@@ -52,7 +53,7 @@
   import SettingsScreen from './lib/SettingsScreen.svelte';
   import { SettingsController } from './lib/settingsController.svelte';
   import type { SpendProjection } from './lib/totalSpend';
-  import type { AppSettings, UsageViewState } from './lib/types';
+  import type { AppSettings, BootstrapState, UsageViewState } from './lib/types';
   import { nextUpdateLabel, UpdateController } from './lib/updateController.svelte';
   import { automaticUpdateDelay, UPDATE_CHECK_INTERVAL_MS } from './lib/updateSchedule';
   import { createWindowController, type AppScreen } from './lib/windowController';
@@ -223,6 +224,21 @@
     confirmationMessage = message;
     if (shareTimer) clearTimeout(shareTimer);
     shareTimer = setTimeout(() => (confirmationMessage = null), 1800);
+  }
+  function applyAccountBootstrap(bootstrap: BootstrapState) {
+    catalog = new ProviderCatalogIndex(bootstrap.catalog);
+    viewState = bootstrap.usage;
+    settingsController.acceptExternalState(bootstrap.settings);
+    scheduleWindowFit();
+  }
+  function handleAccountAdded(bootstrap: BootstrapState) {
+    applyAccountBootstrap(bootstrap);
+    showConfirmation(t('accounts.addedToast'));
+  }
+  function handleAccountRemoved(bootstrap: BootstrapState, removedId: string) {
+    applyAccountBootstrap(bootstrap);
+    if (screen === `provider:${removedId}`) navigate('customize');
+    showConfirmation(t('accounts.removedToast'));
   }
   function saveCustomization(next: AppSettings) {
     const current = settingsState;
@@ -740,6 +756,15 @@
       }),
     );
     listeners.add(
+      onCatalogState((nextCatalog) => {
+        catalog = new ProviderCatalogIndex(nextCatalog);
+        if (screen.startsWith('provider:') && !catalog.provider(screen.slice(9))) {
+          navigate('customize');
+        }
+        scheduleWindowFit();
+      }),
+    );
+    listeners.add(
       onOpenScreen((target) => navigate(target === 'settings' ? 'settings' : 'customize')),
     );
     listeners.add(
@@ -930,6 +955,8 @@
                 renamableProviderIds={settingsState.renamableProviderIds}
                 onChange={saveCustomization}
                 onNameChange={saveSettings}
+                onAccountAdded={handleAccountAdded}
+                onAccountRemoved={handleAccountRemoved}
                 onReorderStart={beginCustomizationGesture}
                 onReorderEnd={endCustomizationGesture}
                 {reducedMotion}

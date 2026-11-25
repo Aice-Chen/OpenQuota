@@ -83,6 +83,19 @@ const BACKEND_MESSAGES_ZH: Record<string, string> = {
   'OpenQuota settings are temporarily unavailable.': 'OpenQuota 设置暂时不可用。',
   'OpenQuota window is unavailable.': 'OpenQuota 窗口当前不可用。',
   'Update source must be a valid HTTPS URL.': '更新源必须是有效的 HTTPS 地址。',
+  'That provider does not support managing additional accounts.': '该服务暂不支持手动管理多账号。',
+  'That account cannot be removed.': '该账号不可移除。',
+  'No saved Antigravity sign-in was found in secure storage. Run `agy` to sign in, or paste a refresh token / credential JSON.':
+    '系统安全存储中未找到已保存的 Antigravity 登录凭据。请先运行 `agy` 登录，或直接粘贴刷新令牌 / 凭据 JSON。',
+  'The pasted credential is invalid. Paste a Google refresh token (1//...) or valid Antigravity credential JSON.':
+    '粘贴的凭据格式无效，请粘贴 Google 刷新令牌（1//...）或有效的 Antigravity 凭据 JSON。',
+  'That account is already added. Sign in to another account first or paste different credentials.':
+    '该账号已添加过。请先切换登录其他账号，或粘贴另一组凭据。',
+  'Account credentials could not be saved to secure storage.': '无法将账号凭据保存到系统安全存储。',
+  'Account credentials could not be removed from secure storage.':
+    '无法从系统安全存储移除账号凭据。',
+  'Account metadata could not be saved.': '无法保存账号配置信息。',
+  'Account metadata could not be removed.': '无法移除账号配置信息。',
 };
 
 const BACKEND_PATTERNS_ZH: Array<[RegExp, (...groups: string[]) => string]> = [

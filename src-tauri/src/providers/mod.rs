@@ -32,10 +32,18 @@ pub fn provider_family(provider_id: &str) -> &str {
         .unwrap_or(provider_id)
 }
 
-pub fn is_claude_account_provider_id(provider_id: &str) -> bool {
-    provider_id.strip_prefix("claude@").is_some_and(|suffix| {
-        suffix.len() == 8 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+pub fn is_account_provider_id(provider_id: &str) -> bool {
+    provider_id.split_once('@').is_some_and(|(family, suffix)| {
+        !family.is_empty()
+            && suffix.len() == 8
+            && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
     })
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub fn is_claude_account_provider_id(provider_id: &str) -> bool {
+    provider_id.starts_with("claude@") && is_account_provider_id(provider_id)
 }
 
 pub fn remember_default_account(
@@ -64,6 +72,38 @@ pub enum CacheIdentity<'a> {
     Unscoped,
     Resolved(&'a str),
     Unresolved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnedCacheIdentity {
+    Unscoped,
+    Resolved(String),
+    Unresolved,
+}
+
+impl OwnedCacheIdentity {
+    pub fn from_borrowed(identity: CacheIdentity<'_>) -> Self {
+        match identity {
+            CacheIdentity::Unscoped => Self::Unscoped,
+            CacheIdentity::Resolved(value) => Self::Resolved(value.to_owned()),
+            CacheIdentity::Unresolved => Self::Unresolved,
+        }
+    }
+
+    pub fn as_borrowed(&self) -> CacheIdentity<'_> {
+        match self {
+            Self::Unscoped => CacheIdentity::Unscoped,
+            Self::Resolved(value) => CacheIdentity::Resolved(value.as_str()),
+            Self::Unresolved => CacheIdentity::Unresolved,
+        }
+    }
+
+    pub fn resolved_value(&self) -> Option<&str> {
+        match self {
+            Self::Resolved(value) => Some(value.as_str()),
+            Self::Unscoped | Self::Unresolved => None,
+        }
+    }
 }
 
 pub struct AccountRefresh {
@@ -130,6 +170,14 @@ pub trait UsageProvider: Send + Sync {
     }
 
     fn supports_account_names(&self) -> bool {
+        false
+    }
+
+    fn supports_multi_account_management(&self) -> bool {
+        false
+    }
+
+    fn is_removable_account(&self) -> bool {
         false
     }
 

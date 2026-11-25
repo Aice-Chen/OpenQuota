@@ -10,12 +10,16 @@ export class ProviderCatalogIndex {
   readonly #providersById: Map<string, ProviderDefinition>;
   readonly #metricsById: Map<string, MetricDefinition>;
   readonly #apiKeyProviderIds: Set<string>;
+  readonly #multiAccountProviderIds: Set<string>;
+  readonly #removableProviderIds: Set<string>;
 
   constructor(catalog: ProviderCatalog) {
     this.providers = catalog.providers;
     this.#providersById = new Map();
     this.#metricsById = new Map();
     this.#apiKeyProviderIds = new Set(catalog.apiKeyProviderIds ?? []);
+    this.#multiAccountProviderIds = new Set(catalog.multiAccountProviderIds ?? []);
+    this.#removableProviderIds = new Set(catalog.removableProviderIds ?? []);
 
     for (const provider of catalog.providers) {
       if (this.#providersById.has(provider.id)) {
@@ -51,6 +55,14 @@ export class ProviderCatalogIndex {
 
   supportsApiKeyConfiguration(id: string) {
     return this.#apiKeyProviderIds.has(id);
+  }
+
+  supportsMultiAccount(id: string) {
+    return this.#multiAccountProviderIds.has(id);
+  }
+
+  isRemovable(id: string) {
+    return this.#removableProviderIds.has(id);
   }
 
   localUsageSourceNote(id: string) {
