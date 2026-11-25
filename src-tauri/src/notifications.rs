@@ -4,7 +4,8 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 
 use crate::{
-    models::{ProviderSnapshot, ProviderViewState},
+    i18n,
+    models::{LanguagePreference, ProviderSnapshot, ProviderViewState},
     pacing::{NotificationEvaluator, PaceAlert},
     popup::PopupDismissGuard,
     service::UsageViewState,
@@ -38,7 +39,7 @@ pub fn finish_refresh(
             settings.registry(),
             chrono::Utc::now(),
         );
-        let failed = deliver(app, &alerts);
+        let failed = deliver(app, &alerts, preferences.language);
         if !failed.is_empty() {
             notifications.rollback(&failed);
         }
@@ -51,7 +52,7 @@ fn notification_snapshot(state: &ProviderViewState) -> Option<&ProviderSnapshot>
     state.snapshot.as_ref()
 }
 
-fn deliver(app: &AppHandle, alerts: &[PaceAlert]) -> Vec<PaceAlert> {
+fn deliver(app: &AppHandle, alerts: &[PaceAlert], language: LanguagePreference) -> Vec<PaceAlert> {
     if permission(app) != "granted" {
         if !alerts.is_empty() {
             crate::app_debug!(
@@ -62,19 +63,14 @@ fn deliver(app: &AppHandle, alerts: &[PaceAlert]) -> Vec<PaceAlert> {
         }
         return alerts.to_vec();
     }
+    let zh = i18n::is_zh(language);
     alerts
         .iter()
         .filter_map(|alert| {
-            let result = show(
-                app,
-                alert.milestone.title(),
-                &format!(
-                    "{} · {}\n{}",
-                    alert.provider,
-                    alert.metric,
-                    alert.milestone.body()
-                ),
-            );
+            let (title, body) = i18n::pace_alert_copy(alert.milestone, language);
+            let metric = i18n::translate_metric_label(&alert.metric, zh);
+            let message = format!("{} · {metric}\n{body}", alert.provider);
+            let result = show(app, title, &message);
             if result.is_ok() {
                 crate::app_info!("notifications", "pace alert delivered");
                 None

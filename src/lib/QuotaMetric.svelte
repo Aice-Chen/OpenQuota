@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import { t, translateBackendText, translateMetricLabel, translateUnit } from './i18n.svelte';
   import {
     formatLimit,
     formatReset,
@@ -34,37 +35,55 @@
   }: Props = $props();
   const used = $derived(Math.min(100, Math.max(0, quota.usedPercent)));
   const remaining = $derived(Math.max(0, 100 - used));
-  const countUnit = $derived(quota.unit?.trim() || 'requests');
+  const quotaLabel = $derived(translateMetricLabel(quota.label));
+  const countUnit = $derived(translateUnit(quota.unit?.trim() || 'requests'));
   const estimateNote = $derived(
-    quota.sourceNote?.trim() || 'Estimated from local usage data and may differ from billed usage.',
+    quota.sourceNote?.trim()
+      ? translateBackendText(quota.sourceNote.trim())
+      : t('quota.estimateDefaultNote'),
   );
   const reading = $derived.by(() => {
     if (quota.format === 'count' && quota.usedValue !== null && quota.limitValue !== null) {
       const value =
         usageDisplay === 'left' ? Math.max(0, quota.limitValue - quota.usedValue) : quota.usedValue;
-      return `${value.toFixed(0)} ${countUnit} ${usageDisplay}`;
+      return usageDisplay === 'used'
+        ? t('quota.countUsed', { value: value.toFixed(0), unit: countUnit })
+        : t('quota.countLeft', { value: value.toFixed(0), unit: countUnit });
     }
     if (quota.format === 'dollars' && quota.usedValue !== null) {
       if (usageDisplay === 'left' && quota.limitValue !== null) {
-        return `$${Math.max(0, quota.limitValue - quota.usedValue).toFixed(2)} left`;
+        return t('quota.dollarsLeft', {
+          value: Math.max(0, quota.limitValue - quota.usedValue).toFixed(2),
+        });
       }
-      return `$${quota.usedValue.toFixed(2)} spent`;
+      return t('quota.dollarsSpent', { value: quota.usedValue.toFixed(2) });
     }
-    return `${(usageDisplay === 'used' ? used : remaining).toFixed(0)}% ${usageDisplay}`;
+    return usageDisplay === 'used'
+      ? t('quota.percentUsed', { value: used.toFixed(0) })
+      : t('quota.percentLeft', { value: remaining.toFixed(0) });
   });
   const readingTooltip = $derived.by(() => {
     if (quota.format === 'count' && quota.usedValue !== null && quota.limitValue !== null) {
       const opposite =
         usageDisplay === 'left' ? quota.usedValue : Math.max(0, quota.limitValue - quota.usedValue);
-      return `${opposite.toFixed(0)} ${countUnit} ${usageDisplay === 'left' ? 'used' : 'left'}`;
+      return usageDisplay === 'left'
+        ? t('quota.countUsed', { value: opposite.toFixed(0), unit: countUnit })
+        : t('quota.countLeft', { value: opposite.toFixed(0), unit: countUnit });
     }
     if (quota.format === 'dollars' && quota.usedValue !== null) {
-      if (usageDisplay === 'left') return `$${quota.usedValue.toFixed(2)} spent`;
-      if (quota.limitValue !== null)
-        return `$${Math.max(0, quota.limitValue - quota.usedValue).toFixed(2)} left`;
+      if (usageDisplay === 'left') {
+        return t('quota.dollarsSpent', { value: quota.usedValue.toFixed(2) });
+      }
+      if (quota.limitValue !== null) {
+        return t('quota.dollarsLeft', {
+          value: Math.max(0, quota.limitValue - quota.usedValue).toFixed(2),
+        });
+      }
       return null;
     }
-    return usageDisplay === 'left' ? `${used.toFixed(0)}% used` : `${remaining.toFixed(0)}% left`;
+    return usageDisplay === 'left'
+      ? t('quota.percentUsed', { value: used.toFixed(0) })
+      : t('quota.percentLeft', { value: remaining.toFixed(0) });
   });
   const fillPercent = $derived.by(() => {
     if (
@@ -106,14 +125,16 @@
       (alwaysShowPacing && pace.severity === 'healthy'),
   );
   const paceLabel = $derived.by(() => {
-    if (pace.severity === 'spent') return 'Limit reached';
+    if (pace.severity === 'spent') return t('quota.limitReached');
     if (pace.severity === 'runningOut')
       return pace.runOutAt === null
         ? null
         : formatLimit(pace.runOutAt, now, resetDisplay, timeFormat);
     if (pace.projectedUsedPercent === null) return null;
     const left = Math.max(0, 100 - pace.projectedUsedPercent);
-    return pace.severity === 'close' ? `~${Math.max(1, Math.round(left))}% spare` : paceDetail;
+    return pace.severity === 'close'
+      ? t('quota.spare', { percent: Math.max(1, Math.round(left)) })
+      : paceDetail;
   });
   const paceTickPercent = $derived(
     pace.evenPacePercent === null
@@ -134,15 +155,15 @@
   );
 </script>
 
-<section class="metric" aria-label={`${quota.label} quota`}>
+<section class="metric" aria-label={t('quota.aria', { label: quotaLabel })}>
   <div class="metric__heading">
     <h2>
-      {quota.label}
+      {quotaLabel}
       {#if quota.estimated}
         <span
           class="metric-estimate"
           data-tooltip={estimateNote}
-          aria-label="Estimated quota"
+          aria-label={t('quota.estimatedAria')}
           role="img"><Icon name="about" size={11} strokeWidth={1.9} /></span
         >
       {/if}
@@ -164,7 +185,9 @@
           <span
             class="pace-warning"
             data-tooltip={paceDetail ?? undefined}
-            aria-label={pace.severity === 'spent' ? 'Limit reached' : 'Will reach limit'}
+            aria-label={pace.severity === 'spent'
+              ? t('quota.limitReached')
+              : t('quota.willReachLimit')}
             ><span class="pace-warning__icon"
               ><Icon name="flame-filled" size={11} strokeWidth={1.8} /></span
             >{paceLabel ?? ''}</span
@@ -182,7 +205,7 @@
     <div
       class="meter meter--{severity}"
       role="progressbar"
-      aria-label={`${quota.label} used`}
+      aria-label={t('quota.usedAria', { label: quotaLabel })}
       aria-valuemin="0"
       aria-valuemax="100"
       aria-valuenow={used}
@@ -207,7 +230,7 @@
       {reading}
     </button>
     {#if freshSession}
-      <span data-tooltip="Sessions start after you send your first message.">Not started</span>
+      <span data-tooltip={t('quota.notStartedTooltip')}>{t('quota.notStarted')}</span>
     {:else}
       <button type="button" data-tooltip={resetTooltip ?? undefined} onclick={onToggleReset}>
         {formatReset(quota.resetsAt, now, resetDisplay, timeFormat)}

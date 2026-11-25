@@ -347,6 +347,7 @@ export const settingsState: SettingsViewState = {
     providerNames: {},
     knownProviderIds: ['claude', 'codex', 'antigravity'],
     showTotalSpend: true,
+    language: 'system',
     theme: 'system',
     density: 'default',
     reduceAnimations: false,

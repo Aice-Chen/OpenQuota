@@ -1,4 +1,6 @@
-use chrono::DateTime;
+use std::collections::HashMap;
+
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::models::{QuotaFormat, QuotaWindow};
@@ -23,66 +25,278 @@ pub struct ModelConfig {
     resets_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-const BUCKETS: [(&str, &str, &str, u64); 4] = [
-    ("gemini-5h", "geminiPro", "Session", 5 * 60 * 60),
-    ("gemini-weekly", "geminiWeekly", "Weekly", 7 * 24 * 60 * 60),
-    ("3p-5h", "claude", "Claude", 5 * 60 * 60),
-    (
-        "3p-weekly",
-        "claudeWeekly",
-        "Claude Weekly",
-        7 * 24 * 60 * 60,
-    ),
-];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum QuotaSlot {
+    GeminiSession,
+    GeminiWeekly,
+    ClaudeSession,
+    ClaudeWeekly,
+}
+
+impl QuotaSlot {
+    const ALL: [Self; 4] = [
+        Self::GeminiSession,
+        Self::GeminiWeekly,
+        Self::ClaudeSession,
+        Self::ClaudeWeekly,
+    ];
+
+    const fn metadata(self) -> (&'static str, &'static str, u64) {
+        match self {
+            Self::GeminiSession => ("geminiPro", "Session", 5 * 60 * 60),
+            Self::GeminiWeekly => ("geminiWeekly", "Weekly", 7 * 24 * 60 * 60),
+            Self::ClaudeSession => ("claude", "Claude", 5 * 60 * 60),
+            Self::ClaudeWeekly => ("claudeWeekly", "Claude Weekly", 7 * 24 * 60 * 60),
+        }
+    }
+
+    fn from_quota_id(id: &str) -> Option<Self> {
+        match id {
+            "geminiPro" => Some(Self::GeminiSession),
+            "geminiWeekly" => Some(Self::GeminiWeekly),
+            "claude" => Some(Self::ClaudeSession),
+            "claudeWeekly" => Some(Self::ClaudeWeekly),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PoolFamily {
+    Gemini { ordinary: bool },
+    Claude,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuotaCadence {
+    Session,
+    Weekly,
+}
+
+struct BestBucket {
+    priority: u8,
+    remaining: f64,
+    resets_at: Option<DateTime<Utc>>,
+}
+
+const SESSION_ALIASES: [&str; 6] = ["5h", "5hr", "5-hour", "five-hour", "five hour", "session"];
+const WEEKLY_ALIASES: [&str; 5] = ["weekly", "week", "7d", "7-day", "7-days"];
 
 pub fn parse_quota_summary(value: &Value) -> Option<Vec<QuotaWindow>> {
     let groups = value
         .pointer("/response/groups")
+        .or_else(|| value.pointer("/summary/groups"))
         .or_else(|| value.get("groups"))?
         .as_array()?;
-    let mut found = std::collections::HashMap::new();
-    for bucket in groups
-        .iter()
-        .filter_map(|group| group.get("buckets").and_then(Value::as_array))
-        .flatten()
-    {
-        let Some(id) = bucket.get("bucketId").and_then(Value::as_str) else {
-            continue;
-        };
-        if !BUCKETS.iter().any(|spec| spec.0 == id) || found.contains_key(id) {
-            continue;
-        }
-        let Some(fraction) = bucket.get("remainingFraction").and_then(number) else {
-            continue;
-        };
-        let reset = bucket
-            .get("resetTime")
+    let mut found: HashMap<QuotaSlot, BestBucket> = HashMap::new();
+    for group in groups {
+        let group_title = group
+            .get("displayName")
+            .or_else(|| group.get("name"))
             .and_then(Value::as_str)
-            .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-            .map(|date| date.to_utc());
-        found.insert(id.to_owned(), (fraction, reset));
+            .and_then(trimmed);
+        let Some(buckets) = group.get("buckets").and_then(Value::as_array) else {
+            continue;
+        };
+        for bucket in buckets {
+            if bucket.get("disabled").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
+            let Some((slot, priority)) = classify_summary_bucket(bucket, group_title) else {
+                continue;
+            };
+            let Some(fraction) = extract_remaining_fraction(bucket) else {
+                continue;
+            };
+            let reset = bucket
+                .get("resetTime")
+                .and_then(Value::as_str)
+                .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+                .map(|date| date.to_utc());
+            let is_better = |b: &BestBucket| (priority, fraction) < (b.priority, b.remaining);
+            if found.get(&slot).is_none_or(is_better) {
+                found.insert(
+                    slot,
+                    BestBucket {
+                        priority,
+                        remaining: fraction,
+                        resets_at: reset,
+                    },
+                );
+            }
+        }
     }
-    Some(
-        BUCKETS
-            .iter()
-            .filter_map(|(bucket_id, quota_id, label, period_seconds)| {
-                let (remaining, resets_at) = found.get(*bucket_id)?;
-                Some(QuotaWindow {
-                    id: (*quota_id).into(),
-                    label: (*label).into(),
-                    used_percent: ((1.0 - remaining.clamp(0.0, 1.0)) * 100.0).round(),
-                    resets_at: *resets_at,
-                    period_seconds: *period_seconds,
-                    format: QuotaFormat::Percent,
-                    used_value: None,
-                    limit_value: None,
-                    unit: None,
-                    estimated: false,
-                    source_note: None,
-                })
+    let quotas: Vec<QuotaWindow> = QuotaSlot::ALL
+        .into_iter()
+        .filter_map(|slot| {
+            let best = found.get(&slot)?;
+            let (quota_id, label, period_seconds) = slot.metadata();
+            Some(QuotaWindow {
+                id: quota_id.into(),
+                label: label.into(),
+                used_percent: ((1.0 - best.remaining.clamp(0.0, 1.0)) * 100.0).round(),
+                resets_at: best.resets_at,
+                period_seconds,
+                format: QuotaFormat::Percent,
+                used_value: None,
+                limit_value: None,
+                unit: None,
+                estimated: false,
+                source_note: None,
             })
-            .collect(),
-    )
+        })
+        .collect();
+    (!quotas.is_empty()).then_some(quotas)
+}
+
+pub fn merge_missing_quotas(
+    primary: Vec<QuotaWindow>,
+    fallback: Vec<QuotaWindow>,
+) -> Vec<QuotaWindow> {
+    let mut by_id = HashMap::new();
+    let mut extra: Vec<QuotaWindow> = Vec::new();
+    for quota in primary.into_iter().chain(fallback) {
+        if let Some(slot) = QuotaSlot::from_quota_id(&quota.id) {
+            by_id.entry(slot).or_insert(quota);
+        } else if !extra.iter().any(|existing| existing.id == quota.id) {
+            extra.push(quota);
+        }
+    }
+    let mut ordered = QuotaSlot::ALL
+        .into_iter()
+        .filter_map(|slot| by_id.remove(&slot))
+        .collect::<Vec<_>>();
+    ordered.extend(extra);
+    ordered
+}
+
+fn classify_summary_bucket(bucket: &Value, group_title: Option<&str>) -> Option<(QuotaSlot, u8)> {
+    let bucket_id = bucket
+        .get("bucketId")
+        .or_else(|| bucket.get("id"))
+        .and_then(Value::as_str)
+        .and_then(trimmed);
+    let display_name = bucket
+        .get("displayName")
+        .or_else(|| bucket.get("name"))
+        .and_then(Value::as_str)
+        .and_then(trimmed);
+    let window = bucket
+        .get("window")
+        .and_then(Value::as_str)
+        .and_then(trimmed);
+
+    let cadence = detect_cadence(window, bucket_id, display_name)?;
+    let family = detect_family(bucket_id, group_title, display_name)?;
+
+    match (family, cadence) {
+        (PoolFamily::Gemini { ordinary }, QuotaCadence::Session) => {
+            Some((QuotaSlot::GeminiSession, u8::from(!ordinary)))
+        }
+        (PoolFamily::Gemini { ordinary }, QuotaCadence::Weekly) => {
+            Some((QuotaSlot::GeminiWeekly, u8::from(!ordinary)))
+        }
+        (PoolFamily::Claude, QuotaCadence::Session) => Some((QuotaSlot::ClaudeSession, 0)),
+        (PoolFamily::Claude, QuotaCadence::Weekly) => Some((QuotaSlot::ClaudeWeekly, 0)),
+    }
+}
+
+fn detect_family(
+    bucket_id: Option<&str>,
+    group_title: Option<&str>,
+    display_name: Option<&str>,
+) -> Option<PoolFamily> {
+    if let Some(id) = bucket_id {
+        let normalized = normalize_token(id);
+        if normalized.contains("gemini") {
+            let ordinary = is_ordinary_gemini_bucket_id(&normalized);
+            return Some(PoolFamily::Gemini { ordinary });
+        }
+        if normalized.contains("3p")
+            || normalized.contains("third-party")
+            || normalized.contains("claude")
+            || normalized.contains("gpt")
+        {
+            return Some(PoolFamily::Claude);
+        }
+    }
+    for text in [group_title, display_name].into_iter().flatten() {
+        let lower = text.to_ascii_lowercase();
+        if lower.contains("gemini") {
+            let ordinary = !lower.chars().any(|ch| ch.is_ascii_digit());
+            return Some(PoolFamily::Gemini { ordinary });
+        }
+        if lower.contains("claude")
+            || lower.contains("gpt")
+            || lower.contains("3p")
+            || lower.contains("third-party")
+        {
+            return Some(PoolFamily::Claude);
+        }
+    }
+    None
+}
+
+fn is_ordinary_gemini_bucket_id(normalized: &str) -> bool {
+    let trimmed = normalized.strip_suffix(" limit").unwrap_or(normalized);
+    SESSION_ALIASES
+        .iter()
+        .chain(WEEKLY_ALIASES.iter())
+        .any(|alias| trimmed == format!("gemini-{alias}"))
+        || trimmed == "gemini"
+}
+
+fn detect_cadence(
+    window: Option<&str>,
+    bucket_id: Option<&str>,
+    display_name: Option<&str>,
+) -> Option<QuotaCadence> {
+    window
+        .and_then(cadence_from_text)
+        .or_else(|| bucket_id.and_then(cadence_from_text))
+        .or_else(|| display_name.and_then(cadence_from_text))
+}
+
+fn cadence_from_text(raw: &str) -> Option<QuotaCadence> {
+    let normalized = normalize_token(raw);
+    let stripped = normalized.strip_suffix(" limit").unwrap_or(&normalized);
+    if matches_alias(stripped, &SESSION_ALIASES) {
+        return Some(QuotaCadence::Session);
+    }
+    if matches_alias(stripped, &WEEKLY_ALIASES) {
+        return Some(QuotaCadence::Weekly);
+    }
+    None
+}
+
+fn matches_alias(value: &str, aliases: &[&str]) -> bool {
+    aliases.iter().any(|alias| {
+        value == *alias
+            || value.ends_with(&format!("-{alias}"))
+            || value.ends_with(&format!(" {alias}"))
+            || value.starts_with(&format!("{alias}-"))
+            || value.starts_with(&format!("{alias} "))
+            || value.contains(&format!("-{alias}-"))
+            || value.contains(&format!(" {alias} "))
+    })
+}
+
+fn normalize_token(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase().replace('_', "-")
+}
+
+fn extract_remaining_fraction(bucket: &Value) -> Option<f64> {
+    if let Some(fraction) = bucket.get("remainingFraction").and_then(number) {
+        return Some(fraction);
+    }
+    let remaining = bucket.get("remaining")?;
+    if let Some(fraction) = remaining.get("remainingFraction").and_then(number) {
+        return Some(fraction);
+    }
+    if remaining.get("case").and_then(Value::as_str) == Some("remainingFraction") {
+        return remaining.get("value").and_then(number);
+    }
+    None
 }
 
 pub fn parse_plan(value: &Value) -> Option<String> {
@@ -183,7 +397,12 @@ pub fn build_legacy_quotas(configs: Vec<ModelConfig>) -> Vec<QuotaWindow> {
         {
             continue;
         }
-        let pool = if config.label.to_ascii_lowercase().contains("gemini") {
+        let is_gemini = config.label.to_ascii_lowercase().contains("gemini")
+            || config
+                .model_id
+                .as_deref()
+                .is_some_and(|id| id.to_ascii_lowercase().contains("gemini"));
+        let pool = if is_gemini {
             &mut gemini
         } else {
             &mut claude
@@ -279,8 +498,8 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::{
-        build_legacy_quotas, parse_cloud_models, parse_command_model_configs, parse_quota_buckets,
-        parse_quota_summary, parse_user_status,
+        build_legacy_quotas, merge_missing_quotas, parse_cloud_models, parse_command_model_configs,
+        parse_quota_buckets, parse_quota_summary, parse_user_status,
     };
 
     #[test]
@@ -292,6 +511,114 @@ mod tests {
         assert_eq!(quotas[0].id, "geminiPro");
         assert_eq!(quotas[0].used_percent, 20.0);
         assert_eq!(quotas[1].id, "claudeWeekly");
+    }
+
+    #[test]
+    fn empty_or_unknown_quota_summary_returns_none_for_fallback() {
+        let value = json!({
+            "response": {
+                "groups": [
+                    {
+                        "buckets": [
+                            { "bucketId": "unknown", "remainingFraction": 1.0 },
+                            { "bucketId": "gemini-5h", "remainingFraction": 0.5, "disabled": true }
+                        ]
+                    }
+                ]
+            }
+        });
+        assert!(parse_quota_summary(&value).is_none());
+    }
+
+    #[test]
+    fn parses_nested_remaining_shapes_cadence_aliases_and_prefers_ordinary_gemini() {
+        let value = json!({
+            "summary": {
+                "groups": [
+                    {
+                        "displayName": "Gemini 4 Argon",
+                        "buckets": [
+                            {
+                                "bucketId": "gemini-argon-wtu-weekly",
+                                "displayName": "Weekly Limit",
+                                "remaining": { "case": "remainingFraction", "value": 0.25 }
+                            }
+                        ]
+                    },
+                    {
+                        "displayName": "Gemini Models",
+                        "buckets": [
+                            {
+                                "id": "gemini_session",
+                                "displayName": "5-hour Limit",
+                                "remaining": { "remainingFraction": 0.75 }
+                            },
+                            {
+                                "bucketId": "gemini-weekly",
+                                "displayName": "Weekly Limit",
+                                "remaining": { "remainingFraction": 0.6 }
+                            }
+                        ]
+                    },
+                    {
+                        "displayName": "Claude and GPT models",
+                        "buckets": [
+                            {
+                                "bucketId": "third-party-5-hour",
+                                "window": "5h",
+                                "remainingFraction": 0.9
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+        let quotas = parse_quota_summary(&value).unwrap();
+        assert_eq!(quotas.len(), 3);
+        assert_eq!(quotas[0].id, "geminiPro");
+        assert_eq!(quotas[0].used_percent, 25.0);
+        assert_eq!(quotas[1].id, "geminiWeekly");
+        assert_eq!(quotas[1].used_percent, 40.0);
+        assert_eq!(quotas[2].id, "claude");
+        assert_eq!(quotas[2].used_percent, 10.0);
+    }
+
+    #[test]
+    fn falls_back_to_versioned_gemini_and_merges_missing_buckets() {
+        let summary = json!({
+            "groups": [
+                {
+                    "displayName": "Gemini 4 Argon",
+                    "buckets": [
+                        {
+                            "bucketId": "gemini-argon-wtu-weekly",
+                            "remainingFraction": 0.7
+                        }
+                    ]
+                },
+                {
+                    "displayName": "Claude and GPT models",
+                    "buckets": [
+                        { "bucketId": "3p-5h", "remainingFraction": 0.8 }
+                    ]
+                }
+            ]
+        });
+        let primary = parse_quota_summary(&summary).unwrap();
+        let fallback = build_legacy_quotas(parse_quota_buckets(&json!({
+            "buckets": [
+                { "modelId": "gemini-3-pro", "remainingFraction": 0.6 },
+                { "modelId": "claude-sonnet", "remainingFraction": 0.1 }
+            ]
+        })));
+        let merged = merge_missing_quotas(primary, fallback);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].id, "geminiPro");
+        assert_eq!(merged[0].used_percent, 40.0);
+        assert_eq!(merged[1].id, "geminiWeekly");
+        assert_eq!(merged[1].used_percent, 30.0);
+        assert_eq!(merged[2].id, "claude");
+        assert_eq!(merged[2].used_percent, 20.0);
     }
 
     #[test]

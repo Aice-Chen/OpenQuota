@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t, translateBackendText } from './i18n.svelte';
   import { formatMetricNumber, formatMetricValue } from './metricFormat';
   import type { ModelUsageBreakdown } from './types';
 
@@ -45,7 +46,7 @@
   class="model-usage-detail"
   style={`top:${top}px`}
   role="tooltip"
-  aria-label={`${title} model usage`}
+  aria-label={t('usage.modelUsageAria', { title })}
   onmouseenter={onEnter}
   onmouseleave={onLeave}
 >
@@ -72,7 +73,7 @@
       </div>
     {/each}
   </div>
-  <p>{breakdown.sourceNote}</p>
+  <p>{translateBackendText(breakdown.sourceNote)}</p>
 </div>
 
 <style>

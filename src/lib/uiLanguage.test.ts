@@ -5,6 +5,7 @@ import tokensCss from '../styles/tokens.css?raw';
 import customizeDetail from './CustomizeProviderDetail.svelte?raw';
 import customizeList from './CustomizeProviderList.svelte?raw';
 import dashboard from './Dashboard.svelte?raw';
+import { dictionaries } from './i18n.svelte';
 import providerNameSection from './ProviderNameSection.svelte?raw';
 import settings from './SettingsScreen.svelte?raw';
 import { coLocatedComponentCss } from './uiStyleSources';
@@ -41,21 +42,24 @@ describe('native UI language contract', () => {
   });
 
   it('keeps Customize concise and free of duplicate status and count copy', () => {
-    expect(customizeList).toContain('Notifications, appearance and more');
-    expect(customizeList).toContain('{provider.metrics.length} metrics');
+    expect(dictionaries.en['customize.settingsSubtitle']).toBe(
+      'Notifications, appearance and more',
+    );
+    expect(dictionaries.en['customize.metricsCount']).toBe('{count} metrics');
     expect(customizeList).not.toContain('Detected locally');
     expect(customizeList).not.toContain('screen-intro');
     expect(customizeList).not.toContain('pinned\n');
-    expect(customizeDetail).toContain('Drag metrics here');
-    expect(customizeDetail).toContain('Starred for menu bar');
-    expect(customizeDetail).toContain('Removed from menu bar');
-    expect(customizeDetail).toContain('Up to 2 stars per provider');
+    expect(dictionaries.en['customize.dragMetricsHere']).toBe('Drag metrics here');
+    expect(dictionaries.en['customize.starredForMenuBar']).toBe('Starred for menu bar');
+    expect(dictionaries.en['customize.removedFromMenuBar']).toBe('Removed from menu bar');
+    expect(dictionaries.en['customize.maxStars']).toBe('Up to 2 stars per provider');
     expect(customizeDetail).not.toContain('provider-toggle-row');
     expect(customizeDetail).not.toContain('section-divider');
     expect(customizeDetail).not.toContain('of 2 pinned');
   });
 
   it('uses the shared Settings labels and single-line control rows', () => {
+    const enValues = Object.values(dictionaries.en);
     for (const label of [
       'General',
       'Show Total Spend',
@@ -63,6 +67,7 @@ describe('native UI language contract', () => {
       'Global Shortcut',
       'Icon Style',
       'Appearance',
+      'Language',
       'Window Mode',
       'Usage Display',
       'Notifications',
@@ -71,11 +76,11 @@ describe('native UI language contract', () => {
       'Check for Updates Automatically',
       'Check for Updates…',
     ]) {
-      expect(settings).toContain(label);
+      expect(enValues).toContain(label);
     }
-    expect(settings).toContain("{ value: 'system', label: 'Auto' }");
-    expect(settings).toContain("{ value: 'twelveHour', label: '12-hour' }");
-    expect(settings).toContain("{ value: 'twentyFourHour', label: '24-hour' }");
+    expect(dictionaries.en['settings.timeFormatAuto']).toBe('Auto');
+    expect(dictionaries.en['settings.timeFormat12']).toBe('12-hour');
+    expect(dictionaries.en['settings.timeFormat24']).toBe('24-hour');
     expect(settings).not.toContain('<h2>Startup</h2>');
     expect(settings).not.toContain('Automatic Checks');
     expect(settings).not.toContain('Combined cost and token summary.');
@@ -84,11 +89,11 @@ describe('native UI language contract', () => {
   });
 
   it('keeps dashboard onboarding, empty state, and menus on the shared wording', () => {
-    expect(dashboard).toContain('Welcome to OpenQuota');
-    expect(dashboard).toContain('Open Customize');
-    expect(dashboard).toContain('Turn on Customize to choose what to show.');
-    expect(dashboard).toContain('Customize…');
-    expect(dashboard).toContain('Refresh {providerDisplayName(menuProvider.id)}');
+    expect(dictionaries.en['dashboard.welcomeTitle']).toBe('Welcome to OpenQuota');
+    expect(dictionaries.en['dashboard.openCustomize']).toBe('Open Customize');
+    expect(dictionaries.en['dashboard.empty']).toBe('Turn on Customize to choose what to show.');
+    expect(dictionaries.en['common.customizeEllipsis']).toBe('Customize…');
+    expect(dictionaries.en['dashboard.refreshProvider']).toBe('Refresh {name}');
     expect(dashboard).not.toContain('Providers Detected');
     expect(dashboard).not.toContain('Starter Provider');
     expect(dashboard).not.toContain("Expand'} On Demand");

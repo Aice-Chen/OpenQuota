@@ -21,15 +21,26 @@ struct DiscoveryOptions {
     port_flag: Option<&'static str>,
 }
 
-const DISCOVERY_OPTIONS: [DiscoveryOptions; 2] = [
+const DISCOVERY_OPTIONS: [DiscoveryOptions; 3] = [
     DiscoveryOptions {
         process_name: "language_server",
-        markers: &["antigravity", "antigravity-ide"],
+        markers: &[
+            "antigravity",
+            "antigravity-ide",
+            "antigravity.app",
+            "gemini.app",
+        ],
         csrf_flag: Some("--csrf_token"),
         port_flag: Some("--extension_server_port"),
     },
     DiscoveryOptions {
         process_name: "agy",
+        markers: &[],
+        csrf_flag: None,
+        port_flag: None,
+    },
+    DiscoveryOptions {
+        process_name: "antigravity-cli",
         markers: &[],
         csrf_flag: None,
         port_flag: None,
@@ -61,7 +72,7 @@ fn discover_windows() -> Option<LanguageServer> {
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
 $netstat = @(& "$env:SystemRoot\System32\netstat.exe" -ano -p TCP 2>$null)
-$items = Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'language_server|^agy(\.exe)?$' } | ForEach-Object {
+$items = Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'language[_-]server|^(agy|antigravity[_-]cli)(\.exe)?$' } | ForEach-Object {
     $pidValue = $_.ProcessId
     $ports = @(Get-NetTCPConnection -OwningProcess $pidValue -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort -Unique)
     if ($ports.Count -eq 0) {
@@ -261,12 +272,16 @@ fn command_matches_process(command: &str, process_name: &str) -> bool {
         .to_ascii_lowercase();
     let executable = executable.strip_suffix(".exe").unwrap_or(&executable);
     let process_name = process_name.to_ascii_lowercase();
-    if executable == process_name {
+    let normalized_exec = executable.replace('-', "_");
+    let normalized_proc = process_name.replace('-', "_");
+    if executable == process_name || normalized_exec == normalized_proc {
         return true;
     }
     let command = command.to_ascii_lowercase();
     if process_name.len() >= 8 {
-        executable.starts_with(&format!("{process_name}_")) || command.contains(&process_name)
+        normalized_exec.starts_with(&format!("{normalized_proc}_"))
+            || command.contains(&process_name)
+            || command.replace('-', "_").contains(&normalized_proc)
     } else {
         let normalized = command.replace('\\', "/");
         normalized.ends_with(&format!("/{process_name}"))

@@ -1,0 +1,132 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: Publish or update a GitHub Release tag with updater latest.json (optional, e.g. v0.5.0)
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.11.0
+          run_install: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify contracts and frontend
+        run: |
+          pnpm verify:versions
+          pnpm verify:contracts
+          pnpm lint
+          pnpm check
+          pnpm test
+
+      - name: Verify Rust
+        run: |
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Build Windows NSIS installer
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+            pnpm tauri build --bundles nsis --config src-tauri/tauri.release.conf.json
+          } else {
+            pnpm build:installer
+          }
+
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenQuota-Windows-Installer
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
+            src-tauri/target/release/openquota.exe
+          if-no-files-found: error
+
+      - name: Publish optional GitHub Release with updater metadata
+        if: ${{ inputs.create_release != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.create_release }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $installer) {
+            throw 'Windows NSIS installer not found.'
+          }
+          $sigPath = "$($installer.FullName).sig"
+          $uploadFiles = @($installer.FullName)
+          $notes = 'Custom Windows build with Antigravity quota fix and switchable Chinese/English UI.'
+
+          if (Test-Path $sigPath) {
+            $uploadFiles += $sigPath
+            $tauriConf = Get-Content -Raw 'src-tauri/tauri.conf.json' | ConvertFrom-Json
+            $version = $tauriConf.version
+            $signature = (Get-Content -Raw $sigPath).Trim()
+            $downloadUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$([System.Uri]::EscapeDataString($env:RELEASE_TAG))/$([System.Uri]::EscapeDataString($installer.Name))"
+            $entry = @{
+              signature = $signature
+              url       = $downloadUrl
+            }
+            $latest = [ordered]@{
+              version   = $version
+              notes     = $notes
+              pub_date  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+              platforms = [ordered]@{
+                'windows-x86_64'      = $entry
+                'windows-x86_64-nsis' = $entry
+              }
+            }
+            $latestPath = Join-Path $installer.DirectoryName 'latest.json'
+            $latest | ConvertTo-Json -Depth 6 | Set-Content -Path $latestPath -Encoding utf8NoBOM
+            $uploadFiles += $latestPath
+          }
+
+          $exists = $false
+          try {
+            gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY | Out-Null
+            $exists = ($LASTEXITCODE -eq 0)
+          } catch {
+            $exists = $false
+          }
+
+          if ($exists) {
+            gh release upload $env:RELEASE_TAG @uploadFiles --repo $env:GITHUB_REPOSITORY --clobber
+            gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --latest --title "OpenQuota $env:RELEASE_TAG" --notes $notes
+          } else {
+            gh release create $env:RELEASE_TAG @uploadFiles --repo $env:GITHUB_REPOSITORY --latest --title "OpenQuota $env:RELEASE_TAG" --notes $notes
+          }

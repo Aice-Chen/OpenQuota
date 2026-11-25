@@ -165,6 +165,9 @@ async fn save_app_settings_inner(
             }
         }
     }
+    if previous.language != updated.language {
+        crate::update_tray_menu(&app, updated.language);
+    }
     crate::app_debug!("config", "application settings persisted");
     tray_presentation::update(
         &app,

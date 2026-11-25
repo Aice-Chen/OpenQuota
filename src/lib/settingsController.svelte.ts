@@ -1,4 +1,5 @@
 import { getAppSettings, saveAppSettings } from './backend';
+import { t, translateBackendText } from './i18n.svelte';
 import type { AppSettings, SettingsViewState } from './types';
 
 export type SettingsMutation = (
@@ -28,7 +29,7 @@ function strictlyFollows(candidate: SettingsViewState, current: SettingsViewStat
 }
 
 function errorMessage(error: unknown) {
-  return typeof error === 'string' ? error : 'Settings could not be saved.';
+  return typeof error === 'string' ? translateBackendText(error) : t('error.settingsSaveFailed');
 }
 
 export class SettingsController {
@@ -111,7 +112,7 @@ export class SettingsController {
   }
 
   runMutation(mutation: SettingsMutation) {
-    if (!this.state) return Promise.reject('Settings are unavailable.');
+    if (!this.state) return Promise.reject(t('error.settingsUnavailable'));
     return this.#enqueueMutation(mutation);
   }
 
@@ -178,7 +179,7 @@ export class SettingsController {
         this.state = state;
       }
     } catch {
-      this.onError('Settings could not be saved or reloaded.');
+      this.onError(t('error.settingsReloadFailed'));
     }
   }
 }

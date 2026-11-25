@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t, translateBackendText, translateMetricLabel } from './i18n.svelte';
   import { usageSourceNote, type ProviderCatalogIndex } from './metrics';
   import QuotaMetric from './QuotaMetric.svelte';
   import StatusMetric from './StatusMetric.svelte';
@@ -42,7 +43,10 @@
     if (source?.kind !== 'status') return null;
     return snapshot.statusMetrics.find((item) => item.id === source.sourceId) ?? null;
   });
-  const resolvedUsageSourceNote = $derived(usageSourceNote(catalog, snapshot));
+  const resolvedUsageSourceNote = $derived(
+    translateBackendText(usageSourceNote(catalog, snapshot)),
+  );
+  const displayLabel = $derived(definition ? translateMetricLabel(definition.label) : '');
 </script>
 
 {#if (definition?.source.kind === 'quota' || definition?.source.kind === 'quotaOrValue') && quota}
@@ -67,36 +71,38 @@
   />
 {:else if definition?.source.kind === 'quotaOrValue' && valueMetric}
   <ValueMetric
-    label={definition.label}
+    label={displayLabel}
     metric={valueMetric}
     {now}
     resetDisplay={settings.resetDisplay}
     timeFormat={settings.timeFormat}
   />
 {:else if definition?.source.kind === 'quota' || definition?.source.kind === 'quotaOrValue'}
-  <section class="metric metric--no-data" aria-label={`${definition.label} quota`}>
-    <div class="metric__heading"><h2>{definition.label}</h2></div>
+  <section class="metric metric--no-data" aria-label={t('quota.aria', { label: displayLabel })}>
+    <div class="metric__heading"><h2>{displayLabel}</h2></div>
     <div class="meter-shell">
       <div
         class="meter"
         role="progressbar"
-        aria-label={`${definition.label} used`}
+        aria-label={t('quota.usedAria', { label: displayLabel })}
         aria-valuemin="0"
         aria-valuemax="100"
         aria-valuenow="0"
       ></div>
     </div>
-    <div class="metric__reading"><span>No data</span><span>Reset unavailable</span></div>
+    <div class="metric__reading">
+      <span>{t('common.noData')}</span><span>{t('quota.resetUnavailable')}</span>
+    </div>
   </section>
 {:else if definition?.source.kind === 'trend'}
   <UsageTrend daily={snapshot.usage.daily} sourceNote={resolvedUsageSourceNote} />
 {:else if definition?.source.kind === 'status'}
-  <StatusMetric label={definition.label} metric={statusMetric} />
+  <StatusMetric label={displayLabel} metric={statusMetric} />
 {:else if definition?.source.kind === 'usage'}
-  <UsageMetric label={definition.label} {period} />
+  <UsageMetric label={displayLabel} {period} />
 {:else if definition?.source.kind === 'value'}
   <ValueMetric
-    label={definition.label}
+    label={displayLabel}
     metric={valueMetric}
     {now}
     resetDisplay={settings.resetDisplay}

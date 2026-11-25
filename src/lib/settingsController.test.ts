@@ -28,6 +28,7 @@ function settingsView(
       providers: [],
       knownProviderIds: [],
       showTotalSpend: true,
+      language: 'system',
       theme,
       density: 'default',
       reduceAnimations: false,

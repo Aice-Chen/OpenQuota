@@ -201,12 +201,15 @@ export interface NotificationPreferences {
   willRunOut: boolean;
 }
 
+export type LanguagePreference = 'system' | 'en' | 'zhCn';
+
 export interface AppSettings {
   schemaVersion: number;
   providers: ProviderLayout[];
   knownProviderIds: string[];
   providerNames: Record<string, string>;
   showTotalSpend: boolean;
+  language: LanguagePreference;
   theme: 'system' | 'light' | 'dark';
   density: 'default' | 'compact';
   reduceAnimations: boolean;

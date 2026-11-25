@@ -1,3 +1,4 @@
+import { t, translateUnit } from './i18n.svelte';
 import type { AppSettings } from './types';
 
 export type MetricNumberKind = 'percent' | 'dollars' | 'count';
@@ -52,7 +53,7 @@ export function formatMetricValue(
   label?: string,
 ) {
   const formatted = formatMetricNumber(value, kind, style);
-  return label ? `${formatted} ${label}` : formatted;
+  return label ? `${formatted} ${translateUnit(label)}` : formatted;
 }
 
 export function formatSpendValue(
@@ -67,20 +68,26 @@ export function formatSpendValue(
 
 export function totalSpendRingCenter(value: number, metric: AppSettings['totalSpendMetric']) {
   if (metric === 'cost') {
-    return { primary: formatMetricNumber(value, 'dollars', 'tray'), unit: 'dollars' };
+    return { primary: formatMetricNumber(value, 'dollars', 'tray'), unit: t('spend.unitDollars') };
   }
   if (metric === 'costPerMillion') {
     return { primary: formatMetricNumber(value, 'dollars', 'row'), unit: 'MTok' };
   }
   const magnitude = Math.abs(value);
   if (magnitude >= 1_000_000_000) {
-    return { primary: rowNumberFormatter.format(value / 1_000_000_000), unit: 'billion' };
+    return {
+      primary: rowNumberFormatter.format(value / 1_000_000_000),
+      unit: t('spend.unitBillion'),
+    };
   }
   if (magnitude >= 1_000_000) {
-    return { primary: rowNumberFormatter.format(value / 1_000_000), unit: 'million' };
+    return {
+      primary: rowNumberFormatter.format(value / 1_000_000),
+      unit: t('spend.unitMillion'),
+    };
   }
   if (magnitude >= 1_000) {
-    return { primary: rowNumberFormatter.format(value / 1_000), unit: 'thousand' };
+    return { primary: rowNumberFormatter.format(value / 1_000), unit: t('spend.unitThousand') };
   }
-  return { primary: rowNumberFormatter.format(value), unit: 'tokens' };
+  return { primary: rowNumberFormatter.format(value), unit: t('spend.unitTokens') };
 }

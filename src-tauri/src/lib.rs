@@ -2,6 +2,7 @@ mod child_process;
 mod commands;
 mod desktop_integration;
 mod hashing;
+mod i18n;
 mod logging;
 #[cfg(any(target_os = "macos", test))]
 mod menu_bar;
@@ -60,24 +61,61 @@ use crate::{
     },
 };
 
-fn install_tray(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+fn build_tray_menu(
+    app: &AppHandle,
+    language: models::LanguagePreference,
+) -> Result<Menu<tauri::Wry>, tauri::Error> {
+    let zh = i18n::is_zh(language);
     #[cfg(target_os = "macos")]
-    let menu = {
-        let settings_item =
-            MenuItem::with_id(app, "settings", "Settings", true, Some("CmdOrCtrl+,"))?;
+    {
+        let (settings_label, quit_label) = if zh {
+            ("设置", "退出 OpenQuota")
+        } else {
+            ("Settings", "Quit OpenQuota")
+        };
+        let settings =
+            MenuItem::with_id(app, "settings", settings_label, true, Some("CmdOrCtrl+,"))?;
         let separator = PredefinedMenuItem::separator(app)?;
-        let quit = MenuItem::with_id(app, "quit", "Quit OpenQuota", true, Some("CmdOrCtrl+Q"))?;
-        Menu::with_items(app, &[&settings_item, &separator, &quit])?
-    };
+        let quit = MenuItem::with_id(app, "quit", quit_label, true, Some("CmdOrCtrl+Q"))?;
+        Menu::with_items(app, &[&settings, &separator, &quit])
+    }
     #[cfg(not(target_os = "macos"))]
-    let menu = {
-        let open = MenuItem::with_id(app, "open", "Open OpenQuota", true, None::<&str>)?;
-        let customize = MenuItem::with_id(app, "customize", "Customize…", true, None::<&str>)?;
-        let settings_item = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    {
+        let (open_label, customize_label, settings_label, quit_label) = if zh {
+            ("打开 OpenQuota", "自定义…", "设置…", "退出 OpenQuota")
+        } else {
+            ("Open OpenQuota", "Customize…", "Settings…", "Quit OpenQuota")
+        };
+        let open = MenuItem::with_id(app, "open", open_label, true, None::<&str>)?;
+        let customize = MenuItem::with_id(app, "customize", customize_label, true, None::<&str>)?;
+        let settings = MenuItem::with_id(app, "settings", settings_label, true, None::<&str>)?;
         let separator = PredefinedMenuItem::separator(app)?;
-        let quit = MenuItem::with_id(app, "quit", "Quit OpenQuota", true, None::<&str>)?;
-        Menu::with_items(app, &[&open, &customize, &settings_item, &separator, &quit])?
+        let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
+        Menu::with_items(app, &[&open, &customize, &settings, &separator, &quit])
+    }
+}
+
+pub(crate) fn update_tray_menu(app: &AppHandle, language: models::LanguagePreference) {
+    let Some(tray) = app.tray_by_id("openquota-tray") else {
+        return;
     };
+    match build_tray_menu(app, language) {
+        Ok(menu) => {
+            if tray.set_menu(Some(menu)).is_err() {
+                app_warn!("tray", "tray menu language update failed");
+            }
+        }
+        Err(_) => {
+            app_warn!("tray", "tray menu rebuild failed");
+        }
+    }
+}
+
+fn install_tray(
+    app: &mut App,
+    language: models::LanguagePreference,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let menu = build_tray_menu(app.handle(), language)?;
 
     let icon = app
         .default_window_icon()
@@ -422,7 +460,7 @@ pub fn run() {
             }
 
             let tray_installed = if desktop_integration.tray_available() {
-                match install_tray(app) {
+                match install_tray(app, settings.get().language) {
                     Ok(()) => {
                         app_info!("lifecycle", "system tray integration ready");
                         true

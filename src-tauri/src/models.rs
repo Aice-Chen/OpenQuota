@@ -618,6 +618,16 @@ pub enum ResetDisplay {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub enum LanguagePreference {
+    #[default]
+    #[serde(other)]
+    System,
+    En,
+    ZhCn,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum TimeFormatPreference {
     #[default]
     System,
@@ -698,6 +708,7 @@ pub struct AppSettings {
     pub known_provider_ids: Vec<String>,
     pub provider_names: BTreeMap<String, String>,
     pub show_total_spend: bool,
+    pub language: LanguagePreference,
     pub theme: ThemePreference,
     pub density: DensityPreference,
     pub reduce_animations: bool,
@@ -727,6 +738,7 @@ impl Default for AppSettings {
             known_provider_ids: Vec::new(),
             provider_names: BTreeMap::new(),
             show_total_spend: true,
+            language: LanguagePreference::System,
             theme: ThemePreference::System,
             density: DensityPreference::Default,
             reduce_animations: false,
@@ -775,9 +787,9 @@ pub struct SettingsViewState {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiKeyMutationOutcome, ApiKeyStatus, AppSettings, LogLevel, ProviderApiKeyState,
-        ProviderErrorKind, ProviderLink, ProviderSnapshot, ProviderViewState, UsagePeriod,
-        WindowMode,
+        ApiKeyMutationOutcome, ApiKeyStatus, AppSettings, LanguagePreference, LogLevel,
+        ProviderApiKeyState, ProviderErrorKind, ProviderLink, ProviderSnapshot, ProviderViewState,
+        UsagePeriod, WindowMode,
     };
 
     #[test]
@@ -786,6 +798,7 @@ mod tests {
         let object = value.as_object_mut().unwrap();
         object.remove("dismissedUpdateVersion");
         object.remove("lastUpdateCheckAt");
+        object.remove("language");
         object.remove("logLevel");
         object.remove("providerNames");
         object.remove("windowMode");
@@ -795,6 +808,7 @@ mod tests {
         assert_eq!(settings.dismissed_update_version, None);
         assert!(settings.provider_names.is_empty());
         assert_eq!(settings.last_update_check_at, None);
+        assert_eq!(settings.language, LanguagePreference::System);
         assert_eq!(settings.log_level, LogLevel::Info);
         assert_eq!(settings.window_mode, WindowMode::Popup);
         assert!(!settings.reduce_animations);

@@ -208,6 +208,7 @@ fn resolved_groups(
     settings: &AppSettings,
     registry: &ProviderRegistry,
 ) -> Vec<TrayGroup> {
+    let zh = crate::i18n::is_zh(settings.language);
     settings
         .providers
         .iter()
@@ -224,8 +225,12 @@ fn resolved_groups(
                 .filter(|metric| metric.pinned)
                 .filter_map(|metric| {
                     let metric_definition = registry.metric(&metric.id)?;
-                    let mut resolved =
-                        tray_metric(metric_definition, snapshot, settings.usage_display)?;
+                    let mut resolved = tray_metric_localized(
+                        metric_definition,
+                        snapshot,
+                        settings.usage_display,
+                        zh,
+                    )?;
                     resolved.detail = format!(
                         "{} {}",
                         settings.provider_display_name(definition),
@@ -243,10 +248,20 @@ fn resolved_groups(
         .collect()
 }
 
+#[cfg(test)]
 fn tray_metric(
     definition: &MetricDefinition,
     snapshot: &ProviderSnapshot,
     display: UsageDisplay,
+) -> Option<TrayMetric> {
+    tray_metric_localized(definition, snapshot, display, false)
+}
+
+fn tray_metric_localized(
+    definition: &MetricDefinition,
+    snapshot: &ProviderSnapshot,
+    display: UsageDisplay,
+    zh: bool,
 ) -> Option<TrayMetric> {
     let tray = definition.tray.as_ref()?;
     let quota = |id: &str| {
@@ -255,6 +270,7 @@ fn tray_metric(
             .iter()
             .find(|quota| quota.id == id)
             .map(|quota| {
+                let label = crate::i18n::translate_metric_label(&quota.label, zh);
                 if quota.format == QuotaFormat::Count {
                     if let (Some(used), Some(limit)) = (quota.used_value, quota.limit_value) {
                         let used_fraction = (limit > 0.0).then(|| (used / limit).clamp(0.0, 1.0));
@@ -262,14 +278,21 @@ fn tray_metric(
                             UsageDisplay::Used => used,
                             UsageDisplay::Left => (limit - used).max(0.0),
                         };
-                        let word = match display {
-                            UsageDisplay::Used => "used",
-                            UsageDisplay::Left => "left",
+                        let word = match (display, zh) {
+                            (UsageDisplay::Used, true) => "已用",
+                            (UsageDisplay::Left, true) => "剩余",
+                            (UsageDisplay::Used, false) => "used",
+                            (UsageDisplay::Left, false) => "left",
                         };
                         let unit = quota.unit.as_deref().unwrap_or("requests");
+                        let detail = if zh {
+                            format!("{label} {word} {value:.0} {unit}")
+                        } else {
+                            format!("{label} {value:.0} {unit} {word}")
+                        };
                         return TrayMetric {
                             value: format!("{value:.0}"),
-                            detail: format!("{} {value:.0} {unit} {word}", quota.label),
+                            detail,
                             gauge: used_fraction.map(|used_fraction| TrayGauge {
                                 display_fraction: match display {
                                     UsageDisplay::Used => used_fraction,
@@ -287,13 +310,20 @@ fn tray_metric(
                     UsageDisplay::Left => 1.0 - used_fraction,
                 };
                 let percent = display_fraction * 100.0;
-                let word = match display {
-                    UsageDisplay::Used => "used",
-                    UsageDisplay::Left => "left",
+                let word = match (display, zh) {
+                    (UsageDisplay::Used, true) => "已用",
+                    (UsageDisplay::Left, true) => "剩余",
+                    (UsageDisplay::Used, false) => "used",
+                    (UsageDisplay::Left, false) => "left",
+                };
+                let detail = if zh {
+                    format!("{label} {word} {percent:.0}%")
+                } else {
+                    format!("{label} {percent:.0}% {word}")
                 };
                 TrayMetric {
                     value: format!("{percent:.0}%"),
-                    detail: format!("{} {percent:.0}% {word}", quota.label),
+                    detail,
                     gauge: Some(TrayGauge {
                         display_fraction,
                         #[cfg(any(not(target_os = "macos"), test))]
@@ -311,9 +341,10 @@ fn tray_metric(
             value_metric(snapshot, source_id, tray.suffix.as_deref())
         }
         MetricSource::Status { source_id } => status_metric(snapshot, source_id),
-        MetricSource::Usage { period } => {
-            usage_metric(&definition.label, usage_period(snapshot, *period))
-        }
+        MetricSource::Usage { period } => usage_metric(
+            crate::i18n::translate_metric_label(&definition.label, zh),
+            usage_period(snapshot, *period),
+        ),
         MetricSource::Trend => None,
     }
 }

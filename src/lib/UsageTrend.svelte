@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { SvelteDate } from 'svelte/reactivity';
+  import { i18n, t } from './i18n.svelte';
   import { formatMetricNumber } from './metricFormat';
   import type { DailyUsage } from './types';
 
@@ -46,7 +47,10 @@
     const date = new Date(`${value}T12:00:00`);
     return Number.isNaN(date.getTime())
       ? value
-      : new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
+      : new Intl.DateTimeFormat(i18n.locale === 'zh-CN' ? 'zh-CN' : 'en-US', {
+          month: 'short',
+          day: 'numeric',
+        }).format(date);
   }
 
   function revealDetail() {
@@ -64,13 +68,13 @@
   });
 </script>
 
-<section class="trend-row" aria-label="Usage Trend">
-  <strong>Usage Trend</strong>
+<section class="trend-row" aria-label={t('trend.title')}>
+  <strong>{t('trend.title')}</strong>
   {#if total > 0}
     <div
       class="trend-chart-wrap"
       role="group"
-      aria-label="Usage trend chart details"
+      aria-label={t('trend.detailsAria')}
       onmouseenter={revealDetail}
       onmouseleave={concealDetail}
     >
@@ -78,7 +82,7 @@
         class="trend-bars"
         class:trend-bars--active={detailVisible}
         role="img"
-        aria-label={`30-day token chart. Peak ${compact(peak.tokens)} tokens on ${peak.date}.`}
+        aria-label={t('trend.chartAria', { tokens: compact(peak.tokens), date: peak.date })}
       >
         {#each points as point (point.date)}
           <span
@@ -90,10 +94,13 @@
       {#if detailVisible}
         <aside class="trend-detail" onmouseenter={revealDetail} onmouseleave={concealDetail}>
           <header>
-            <strong>Usage Trend</strong><span
+            <strong>{t('trend.title')}</strong><span
               >{hoveredDate
-                ? `${dayLabel(highlightedPoint.date)} · ${compact(highlightedPoint.tokens)} tokens`
-                : `peak ${compact(peak.tokens)} tokens`}</span
+                ? t('trend.dayTokens', {
+                    day: dayLabel(highlightedPoint.date),
+                    tokens: compact(highlightedPoint.tokens),
+                  })
+                : t('trend.peakTokens', { tokens: compact(peak.tokens) })}</span
             >
           </header>
           <div
@@ -120,7 +127,7 @@
       {/if}
     </div>
   {:else}
-    <p class="trend-empty">No data</p>
+    <p class="trend-empty">{t('common.noData')}</p>
   {/if}
 </section>
 

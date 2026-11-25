@@ -18,8 +18,8 @@ use self::{
     client::{AntigravityClient, CloudOutcome, CloudUserAgent, RefreshOutcome},
     discovery::discover,
     mapper::{
-        build_legacy_quotas, parse_cloud_models, parse_command_model_configs, parse_plan,
-        parse_quota_buckets, parse_quota_summary, parse_user_status,
+        build_legacy_quotas, merge_missing_quotas, parse_cloud_models, parse_command_model_configs,
+        parse_plan, parse_quota_buckets, parse_quota_summary, parse_user_status,
     },
 };
 
@@ -110,18 +110,31 @@ impl AntigravityProvider {
 
     fn refresh_inner(&self) -> Result<ProviderSnapshot, AntigravityError> {
         if let Some(server) = discover() {
-            if let Some(summary) = self
+            let summary_quotas = self
                 .client
                 .call_language_server(&server, "RetrieveUserQuotaSummary")
-            {
-                if let Some(quotas) = parse_quota_summary(&summary) {
-                    let plan = self
-                        .client
-                        .call_language_server(&server, "GetUserStatus")
-                        .as_ref()
-                        .and_then(parse_plan);
-                    return Ok(snapshot(plan, quotas));
+                .as_ref()
+                .and_then(parse_quota_summary);
+
+            if let Some(mut quotas) = summary_quotas {
+                let status = self.client.call_language_server(&server, "GetUserStatus");
+                let plan = status.as_ref().and_then(parse_plan);
+                if !has_gemini_session(&quotas) {
+                    if let Some((_, configs)) = status.as_ref().and_then(parse_user_status) {
+                        quotas = merge_missing_quotas(quotas, build_legacy_quotas(configs));
+                    }
+                    if !has_gemini_session(&quotas) {
+                        if let Some(configs) = self
+                            .client
+                            .call_language_server(&server, "GetCommandModelConfigs")
+                            .as_ref()
+                            .and_then(parse_command_model_configs)
+                        {
+                            quotas = merge_missing_quotas(quotas, build_legacy_quotas(configs));
+                        }
+                    }
                 }
+                return Ok(snapshot(plan, quotas));
             }
 
             if let Some(status) = self.client.call_language_server(&server, "GetUserStatus") {
@@ -212,89 +225,133 @@ impl AntigravityProvider {
     }
 
     fn fetch_remote(&self, token: &str) -> Result<ProviderSnapshot, AntigravityError> {
-        match self.client.cloud_code(
+        let (plan, project) = self.load_code_assist(token)?;
+        let project = project.as_deref();
+
+        let mut summary_quotas: Option<Vec<crate::models::QuotaWindow>> = None;
+        match self.cloud_code_with_project(
             QUOTA_SUMMARY_PATH,
             token,
-            json!({}),
+            project,
             CloudUserAgent::Antigravity,
         ) {
             CloudOutcome::Ok(value) => {
                 if let Some(quotas) = parse_quota_summary(&value) {
-                    return Ok(snapshot(self.load_remote_plan(token), quotas));
+                    if has_gemini_session(&quotas) {
+                        return Ok(snapshot(plan, quotas));
+                    }
+                    summary_quotas = Some(quotas);
                 }
             }
             CloudOutcome::AuthFailed => return Err(AntigravityError::AuthExpired),
             CloudOutcome::Unavailable => {}
         }
 
-        match self.client.cloud_code(
+        match self.cloud_code_with_project(
             FETCH_MODELS_PATH,
             token,
-            json!({}),
+            project,
             CloudUserAgent::Antigravity,
         ) {
             CloudOutcome::Ok(value) => {
-                let quotas = build_legacy_quotas(parse_cloud_models(&value));
-                if !quotas.is_empty() {
-                    return Ok(snapshot(self.load_remote_plan(token), quotas));
+                let fallback = build_legacy_quotas(parse_cloud_models(&value));
+                if !fallback.is_empty() {
+                    let merged = match summary_quotas {
+                        Some(primary) => merge_missing_quotas(primary, fallback),
+                        None => fallback,
+                    };
+                    return Ok(snapshot(plan, merged));
                 }
             }
             CloudOutcome::AuthFailed => return Err(AntigravityError::AuthExpired),
             CloudOutcome::Unavailable => {}
         }
 
-        let (plan, project) = match self.client.cloud_code(
-            LOAD_CODE_ASSIST_PATH,
+        match self.cloud_code_with_project(
+            RETRIEVE_QUOTA_PATH,
             token,
-            json!({}),
+            project,
             CloudUserAgent::Agy,
         ) {
-            CloudOutcome::Ok(value) => (
+            CloudOutcome::Ok(value) => {
+                let fallback = build_legacy_quotas(parse_quota_buckets(&value));
+                if !fallback.is_empty() {
+                    let merged = match summary_quotas {
+                        Some(primary) => merge_missing_quotas(primary, fallback),
+                        None => fallback,
+                    };
+                    return Ok(snapshot(plan, merged));
+                }
+            }
+            CloudOutcome::AuthFailed => return Err(AntigravityError::AuthExpired),
+            CloudOutcome::Unavailable => {}
+        }
+        if let Some(quotas) = summary_quotas {
+            return Ok(snapshot(plan, quotas));
+        }
+        Err(AntigravityError::Unavailable)
+    }
+
+    fn cloud_code_with_project(
+        &self,
+        path: &str,
+        token: &str,
+        project: Option<&str>,
+        user_agent: CloudUserAgent,
+    ) -> CloudOutcome {
+        let body = project
+            .map(|project| json!({"project": project}))
+            .unwrap_or_else(|| json!({}));
+        let outcome = self.client.cloud_code(path, token, body, user_agent);
+        if matches!(outcome, CloudOutcome::Unavailable) && project.is_some() {
+            return self.client.cloud_code(path, token, json!({}), user_agent);
+        }
+        outcome
+    }
+
+    fn load_code_assist(
+        &self,
+        token: &str,
+    ) -> Result<(Option<String>, Option<String>), AntigravityError> {
+        let metadata_body = json!({
+            "metadata": {
+                "ideType": "ANTIGRAVITY",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI"
+            }
+        });
+        let primary = self.client.cloud_code(
+            LOAD_CODE_ASSIST_PATH,
+            token,
+            metadata_body,
+            CloudUserAgent::Antigravity,
+        );
+        let outcome = match primary {
+            CloudOutcome::Unavailable => self.client.cloud_code(
+                LOAD_CODE_ASSIST_PATH,
+                token,
+                json!({}),
+                CloudUserAgent::Agy,
+            ),
+            other => other,
+        };
+        match outcome {
+            CloudOutcome::Ok(value) => Ok((
                 remote_plan(&value),
                 value
                     .get("cloudaicompanionProject")
                     .and_then(Value::as_str)
                     .filter(|value| !value.trim().is_empty())
                     .map(str::to_owned),
-            ),
-            CloudOutcome::AuthFailed => return Err(AntigravityError::AuthExpired),
-            CloudOutcome::Unavailable => (None, None),
-        };
-
-        let body = project
-            .as_ref()
-            .map(|project| json!({"project": project}))
-            .unwrap_or_else(|| json!({}));
-        let mut quota =
-            self.client
-                .cloud_code(RETRIEVE_QUOTA_PATH, token, body, CloudUserAgent::Agy);
-        if matches!(quota, CloudOutcome::Unavailable) && project.is_some() {
-            quota =
-                self.client
-                    .cloud_code(RETRIEVE_QUOTA_PATH, token, json!({}), CloudUserAgent::Agy);
-        }
-        match quota {
-            CloudOutcome::Ok(value) => {
-                let quotas = build_legacy_quotas(parse_quota_buckets(&value));
-                if !quotas.is_empty() {
-                    return Ok(snapshot(plan, quotas));
-                }
-            }
-            CloudOutcome::AuthFailed => return Err(AntigravityError::AuthExpired),
-            CloudOutcome::Unavailable => {}
-        }
-        Err(AntigravityError::Unavailable)
-    }
-
-    fn load_remote_plan(&self, token: &str) -> Option<String> {
-        match self
-            .client
-            .cloud_code(LOAD_CODE_ASSIST_PATH, token, json!({}), CloudUserAgent::Agy)
-        {
-            CloudOutcome::Ok(value) => remote_plan(&value),
-            _ => None,
+            )),
+            CloudOutcome::AuthFailed => Err(AntigravityError::AuthExpired),
+            CloudOutcome::Unavailable => Ok((None, None)),
         }
     }
+}
+
+fn has_gemini_session(quotas: &[crate::models::QuotaWindow]) -> bool {
+    quotas.iter().any(|quota| quota.id == "geminiPro")
 }
 
 fn access_token_candidates(

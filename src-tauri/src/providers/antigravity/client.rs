@@ -39,9 +39,29 @@ pub enum CloudUserAgent {
 impl CloudUserAgent {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Antigravity => "antigravity",
+            Self::Antigravity => hub_user_agent(),
             Self::Agy => "agy",
         }
+    }
+}
+
+const fn hub_user_agent() -> &'static str {
+    if cfg!(target_os = "windows") {
+        if cfg!(target_arch = "aarch64") {
+            "antigravity/hub/2.9.1 windows/arm64"
+        } else {
+            "antigravity/hub/2.9.1 windows/amd64"
+        }
+    } else if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") {
+            "antigravity/hub/2.9.1 darwin/arm64"
+        } else {
+            "antigravity/hub/2.9.1 darwin/amd64"
+        }
+    } else if cfg!(target_arch = "aarch64") {
+        "antigravity/hub/2.9.1 linux/arm64"
+    } else {
+        "antigravity/hub/2.9.1 linux/amd64"
     }
 }
 
@@ -93,6 +113,16 @@ impl AntigravityClient {
     }
 
     pub fn call_language_server(&self, server: &LanguageServer, method: &str) -> Option<Value> {
+        let body = if method == "RetrieveUserQuotaSummary" {
+            json!({ "forceRefresh": true })
+        } else {
+            json!({"metadata": {
+                "ideName": "antigravity",
+                "extensionName": "antigravity",
+                "ideVersion": "unknown",
+                "locale": "en"
+            }})
+        };
         let mut endpoints = Vec::new();
         for port in &server.ports {
             endpoints.push(("https", *port));
@@ -103,19 +133,15 @@ impl AntigravityClient {
         }
         for (scheme, port) in endpoints {
             let url = format!("{scheme}://127.0.0.1:{port}/{SERVICE}/{method}");
-            let response = self
+            let mut request = self
                 .local
                 .post(url)
                 .header("Content-Type", "application/json")
-                .header("Connect-Protocol-Version", "1")
-                .header("x-codeium-csrf-token", &server.csrf)
-                .json(&json!({"metadata": {
-                    "ideName": "antigravity",
-                    "extensionName": "antigravity",
-                    "ideVersion": "unknown",
-                    "locale": "en"
-                }}))
-                .send();
+                .header("Connect-Protocol-Version", "1");
+            if !server.csrf.is_empty() {
+                request = request.header("x-codeium-csrf-token", &server.csrf);
+            }
+            let response = request.json(&body).send();
             let Ok(response) = response else {
                 crate::app_debug!(
                     "http",

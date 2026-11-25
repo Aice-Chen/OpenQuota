@@ -35,6 +35,7 @@
   import { restoreCustomization } from './lib/customizationHistory';
   import Dashboard from './lib/Dashboard.svelte';
   import Icon from './lib/Icon.svelte';
+  import { i18n, t } from './lib/i18n.svelte';
   import { createListenerRegistry } from './lib/listenerRegistry';
   import { emptyProviderCatalog, ProviderCatalogIndex } from './lib/metrics';
   import { springMotion } from './lib/motion';
@@ -123,6 +124,8 @@
     const root = document.documentElement;
     root.toggleAttribute('data-reduced-motion', reducedMotion);
     if (!settingsState) return;
+    i18n.setPreference(settingsState.settings.language ?? 'system');
+    root.lang = i18n.locale;
     if (settingsState.settings.theme === 'system') delete root.dataset.theme;
     else root.dataset.theme = settingsState.settings.theme;
     root.dataset.density = settingsState.settings.density;
@@ -186,7 +189,7 @@
     navigate(`provider:${providerId}`);
     if (!focusBack) return;
     await tick();
-    document.querySelector<HTMLButtonElement>('.screen-header button[aria-label="Back"]')?.focus();
+    document.querySelector<HTMLButtonElement>('.screen-header > button:first-child')?.focus();
   }
   function back() {
     if (screen.startsWith('provider:')) navigate('customize');
@@ -311,7 +314,7 @@
           ]),
         ),
       };
-      settingsError = 'OpenQuota could not start a provider refresh.';
+      settingsError = t('error.refreshFailed');
     }
   }
   async function refreshProvider(providerId: string) {
@@ -337,7 +340,7 @@
           },
         };
       }
-      settingsError = `${providerDisplayName(providerId)} usage could not be refreshed.`;
+      settingsError = t('error.providerRefreshFailed', { name: providerDisplayName(providerId) });
     }
   }
   function openProviderLink(providerId: string, linkIndex: number) {
@@ -357,7 +360,7 @@
       );
       customizationHistory = [...customizationHistory.slice(-19), previous];
     } catch {
-      settingsError = 'Customization could not be reset.';
+      settingsError = t('error.customizationResetFailed');
     } finally {
       resettingCustomization = false;
       resetConfirmationOpen = false;
@@ -380,7 +383,7 @@
       );
       customizationHistory = [...customizationHistory.slice(-19), previous];
     } catch {
-      settingsError = `${providerDisplayName(providerId)} customization could not be reset.`;
+      settingsError = t('error.providerResetFailed', { name: providerDisplayName(providerId) });
     } finally {
       resettingProviderId = null;
     }
@@ -399,9 +402,9 @@
       updatePanelHeightMode();
       updatePanelResizeEdge();
       settingsError = null;
-      showConfirmation('All settings restored');
+      showConfirmation(t('toast.allSettingsRestored'));
     } catch {
-      settingsError = 'Settings could not be reset.';
+      settingsError = t('error.settingsResetFailed');
       updatePanelHeightMode();
     } finally {
       resettingAllSettings = false;
@@ -420,7 +423,7 @@
     } else {
       await navigator.clipboard.writeText(fallback);
     }
-    showConfirmation('Copied to clipboard');
+    showConfirmation(t('toast.copiedToClipboard'));
   }
   async function shareProvider(providerId: string) {
     const current = settingsState;
@@ -441,7 +444,7 @@
       });
       await copyCanvas(canvas, snapshot);
     } catch {
-      settingsError = 'Provider screenshot could not be copied.';
+      settingsError = t('error.providerScreenshotFailed');
     }
   }
   async function shareTotalSpend(projection: SpendProjection) {
@@ -459,21 +462,21 @@
       await copyCanvas(canvas, card.innerText.trim());
       return true;
     } catch {
-      settingsError = 'Total Spend screenshot could not be copied.';
+      settingsError = t('error.totalSpendScreenshotFailed');
       return false;
     }
   }
   async function copyLogPath() {
     const path = await getLogPath();
     await navigator.clipboard.writeText(path);
-    showConfirmation('Log path copied');
+    showConfirmation(t('toast.logPathCopied'));
   }
   async function openLogFolder() {
     await openSystemLogFolder();
   }
   function topBarTitle() {
     if (screen.startsWith('provider:')) return providerDisplayName(screen.slice(9));
-    return screen === 'settings' ? 'Settings' : 'Customize';
+    return screen === 'settings' ? t('common.settings') : t('common.customize');
   }
   async function openAbout() {
     aboutTrigger = optionsMenuElement?.querySelector<HTMLElement>(':scope > summary') ?? null;
@@ -589,7 +592,7 @@
         // upstream support is still unavailable.
         await getCurrentWindow().startResizeDragging(edge === 'top' ? 'North' : 'South');
       } catch {
-        settingsError = 'OpenQuota panel resize could not be started.';
+        settingsError = t('error.panelResizeFailed');
       } finally {
         await lockPanelResizeAxis().catch(() => undefined);
         updatePanelHeightMode();
@@ -605,7 +608,7 @@
     event.preventDefault();
     void getCurrentWindow()
       .startDragging()
-      .catch(() => (settingsError = 'OpenQuota window could not be moved.'));
+      .catch(() => (settingsError = t('error.windowMoveFailed')));
   }
   async function changePanelHeightMode(mode: PanelHeightMode) {
     if (!('__TAURI_INTERNALS__' in window)) return;
@@ -619,7 +622,7 @@
       if (request === panelHeightModeRequest) updatePanelHeightMode();
     } catch {
       if (request !== panelHeightModeRequest) return;
-      settingsError = 'OpenQuota could not change the panel height mode.';
+      settingsError = t('error.panelHeightModeFailed');
       updatePanelHeightMode();
     }
   }
@@ -629,14 +632,14 @@
       const permissionState = await requestNotificationPermission();
       settingsController.acceptExternalState(permissionState);
     } catch {
-      settingsError = 'Notification permission could not be requested.';
+      settingsError = t('error.notificationPermissionFailed');
     }
   }
   async function openNotificationSettings() {
     try {
       await openSystemNotificationSettings();
     } catch {
-      settingsError = 'Notification settings could not be opened on this system.';
+      settingsError = t('error.notificationSettingsFailed');
     }
   }
   async function checkForUpdates(manual = false) {
@@ -725,7 +728,7 @@
     document.addEventListener('keydown', handleKeydown);
     const clock = window.setInterval(() => (now = Date.now()), 30_000);
     const listeners = createListenerRegistry(() => {
-      settingsError ??= 'OpenQuota event bridge is unavailable.';
+      settingsError ??= t('error.eventBridgeUnavailable');
     });
     listeners.add(onUsageState((state) => (viewState = state)));
     listeners.add(
@@ -754,7 +757,7 @@
         settingsController.setState(state.settings);
         automaticUpdatesReady = true;
       })
-      .catch(() => (settingsError = 'OpenQuota backend is unavailable.'));
+      .catch(() => (settingsError = t('error.backendUnavailable')));
     return () => {
       document.removeEventListener('keydown', handleKeydown);
       window.clearInterval(clock);
@@ -776,23 +779,23 @@
   class="popover"
   class:popover--floating={floatingWindow}
   class:popover--macos={floatingWindow && platform === 'macos'}
-  aria-label="OpenQuota usage dashboard"
+  aria-label={t('app.dashboardLabel')}
   oncontextmenu={(event) => event.preventDefault()}
 >
   <p id="reorder-instructions" class="sr-only">
-    Drag to reorder. With a keyboard, use Alt plus Up Arrow or Alt plus Down Arrow.
+    {t('app.reorderInstructions')}
   </p>
   {#if renderedResizeEdge === 'top'}
     <div
       class="panel-resize-dragger panel-resize-dragger--top"
       role="separator"
-      aria-label="Resize panel height"
+      aria-label={t('app.resizePanelHeight')}
       aria-orientation="horizontal"
       onpointerdown={handlePanelResizePointerDown}
     ></div>
   {/if}
   {#if floatingWindow}
-    <header class="floating-chrome" aria-label="OpenQuota window controls">
+    <header class="floating-chrome" aria-label={t('app.windowControls')}>
       <div class="floating-chrome__drag">
         <OpenQuotaMark size={14} />
         <span>OpenQuota</span>
@@ -800,7 +803,7 @@
       <button
         class="floating-chrome__close"
         type="button"
-        aria-label={settingsState?.trayAvailable ? 'Hide OpenQuota' : 'Close OpenQuota'}
+        aria-label={settingsState?.trayAvailable ? t('app.hideOpenQuota') : t('app.closeOpenQuota')}
         onclick={closeMainWindow}
       >
         <Icon name="close" size={12} strokeWidth={2.1} />
@@ -810,7 +813,12 @@
   {#if settingsState}
     {#if screen !== 'dashboard'}
       <header class="screen-header app-top-bar">
-        <button type="button" onclick={back} aria-label="Back" data-tooltip="Back">
+        <button
+          type="button"
+          onclick={back}
+          aria-label={t('common.back')}
+          data-tooltip={t('common.back')}
+        >
           <Icon name="back" size={16} strokeWidth={2.2} />
         </button>
         <h1>{topBarTitle()}</h1>
@@ -819,8 +827,8 @@
             class="text-button"
             type="button"
             onclick={requestCustomizationReset}
-            aria-label="Reset all customization"
-            data-tooltip="Reset All Customization"
+            aria-label={t('app.resetAllCustomizationAria')}
+            data-tooltip={t('app.resetAllCustomization')}
             ><Icon name="reset" size={15} strokeWidth={2} /></button
           >
         {:else if screen.startsWith('provider:')}
@@ -829,8 +837,8 @@
             type="button"
             disabled={resettingProviderId !== null}
             onclick={() => resetProviderCustomization(screen.slice(9))}
-            aria-label={`Reset ${topBarTitle()}`}
-            data-tooltip={`Reset ${topBarTitle()}`}
+            aria-label={t('app.resetProvider', { name: topBarTitle() })}
+            data-tooltip={t('app.resetProvider', { name: topBarTitle() })}
             ><Icon name="reset" size={15} strokeWidth={2} /></button
           >
         {:else}
@@ -936,10 +944,10 @@
           type="button"
           onclick={refresh}
           disabled={anyRefreshing}
-          aria-label="Refresh all provider usage"
+          aria-label={t('app.refreshAllUsage')}
         >
           <span>OpenQuota {appVersion}</span><small
-            >{anyRefreshing ? 'Updating…' : nextUpdateLabel(lastFullRefresh, now)}</small
+            >{anyRefreshing ? t('app.updating') : nextUpdateLabel(lastFullRefresh, now)}</small
           >
         </button>
         {#if screen === 'dashboard'}
@@ -949,17 +957,17 @@
                 class="window-mode-toggle"
                 class:window-mode-toggle--active={floatingWindow}
                 type="button"
-                aria-label={floatingWindow ? 'Return to Tray Popup' : 'Keep Window Open'}
+                aria-label={floatingWindow ? t('app.returnToTrayPopup') : t('app.keepWindowOpen')}
                 aria-pressed={floatingWindow}
-                data-tooltip={floatingWindow ? 'Return to Tray Popup' : 'Keep Window Open'}
+                data-tooltip={floatingWindow ? t('app.returnToTrayPopup') : t('app.keepWindowOpen')}
                 onclick={toggleFloatingWindow}
               >
                 <Icon name={floatingWindow ? 'pin-filled' : 'pin'} size={14} strokeWidth={1.9} />
               </button>
             {/if}
             <details class="options-menu" bind:this={optionsMenuElement}>
-              <summary aria-label="Open options" onkeydown={handleOptionsKey}
-                ><span>Options</span><Icon
+              <summary aria-label={t('app.openOptions')} onkeydown={handleOptionsKey}
+                ><span>{t('common.options')}</span><Icon
                   name="chevron-down"
                   size={11}
                   strokeWidth={2.2}
@@ -968,7 +976,7 @@
               <div
                 class="options-menu__panel"
                 role="menu"
-                aria-label="Options menu"
+                aria-label={t('app.optionsMenu')}
                 tabindex="-1"
                 onkeydown={handleOptionsKey}
                 onclick={(event) => {
@@ -980,16 +988,18 @@
                 <button
                   class="menu-item"
                   type="button"
-                  aria-label="Customize"
+                  aria-label={t('common.customize')}
                   onclick={() => navigate('customize')}
-                  ><Icon name="sliders" /><span>Customize</span><kbd>↩</kbd></button
+                  ><Icon name="sliders" /><span>{t('common.customize')}</span><kbd>↩</kbd></button
                 >
                 <button
                   class="menu-item"
                   type="button"
-                  aria-label="Settings"
+                  aria-label={t('common.settings')}
                   onclick={() => navigate('settings')}
-                  ><Icon name="gear" /><span>Settings</span><kbd>{shortcuts.settings}</kbd></button
+                  ><Icon name="gear" /><span>{t('common.settings')}</span><kbd
+                    >{shortcuts.settings}</kbd
+                  ></button
                 >
                 <hr />
                 <details
@@ -1000,7 +1010,7 @@
                   <summary
                     ><span class="share-menu__direction"
                       ><Icon name="chevron-left" size={12} /></span
-                    ><span>Share Screenshot</span></summary
+                    ><span>{t('app.shareScreenshot')}</span></summary
                   >
                   <div>
                     {#if shareMenuOpen}
@@ -1013,18 +1023,19 @@
                   </div>
                 </details>
                 <button class="menu-item" type="button" onclick={() => void checkForUpdates(true)}
-                  ><Icon name="refresh" /><span>Check for Updates…</span></button
+                  ><Icon name="refresh" /><span>{t('app.checkForUpdates')}</span></button
                 >
                 <hr />
                 <button class="menu-item" type="button" onclick={openAbout}
-                  ><Icon name="about" /><span>About OpenQuota</span></button
+                  ><Icon name="about" /><span>{t('app.aboutOpenQuota')}</span></button
                 >
                 <button
                   class="menu-item menu-item--danger"
                   type="button"
-                  aria-label="Quit OpenQuota"
+                  aria-label={t('app.quitOpenQuota')}
                   onclick={quitApp}
-                  ><Icon name="power" /><span>Quit OpenQuota</span><kbd>{shortcuts.quit}</kbd
+                  ><Icon name="power" /><span>{t('app.quitOpenQuota')}</span><kbd
+                    >{shortcuts.quit}</kbd
                   ></button
                 >
               </div>
@@ -1042,9 +1053,9 @@
 
     {#if resetConfirmationOpen}
       <ConfirmationSheet
-        title="Reset All Customization?"
-        message="This turns installed providers back on and restores every provider's metric visibility and order."
-        confirmLabel="Reset All"
+        title={t('confirm.resetCustomizationTitle')}
+        message={t('confirm.resetCustomizationMessage')}
+        confirmLabel={t('common.resetAll')}
         pending={resettingCustomization}
         onConfirm={() => void confirmCustomizationReset()}
         onCancel={() => (resetConfirmationOpen = false)}
@@ -1053,9 +1064,9 @@
 
     {#if settingsResetConfirmationOpen}
       <ConfirmationSheet
-        title="Reset All Settings?"
-        message="This restores appearance, notifications, shortcuts, updates, panel sizing, provider names, and layout. Provider sign-ins, API keys, and usage history stay in place. This cannot be undone."
-        confirmLabel="Reset All"
+        title={t('confirm.resetSettingsTitle')}
+        message={t('confirm.resetSettingsMessage')}
+        confirmLabel={t('common.resetAll')}
         pending={resettingAllSettings}
         onConfirm={() => void confirmAllSettingsReset()}
         onCancel={() => (settingsResetConfirmationOpen = false)}
@@ -1082,20 +1093,20 @@
           role="dialog"
           tabindex="-1"
           aria-modal="true"
-          aria-label="About OpenQuota"
+          aria-label={t('app.aboutOpenQuota')}
         >
           <button
             bind:this={aboutCloseButton}
             class="about-card__close"
             type="button"
-            aria-label="Close About"
+            aria-label={t('app.closeAbout')}
             onclick={() => void closeAbout()}
             ><Icon name="close" size={11} strokeWidth={2.3} /></button
           >
           <OpenQuotaMark size={44} />
           <h1>OpenQuota</h1>
-          <p>Version {appVersion}</p>
-          <small>Private, local usage monitoring for your AI coding tools.</small>
+          <p>{t('app.version', { version: appVersion })}</p>
+          <small>{t('app.tagline')}</small>
         </div>
       </div>
     {/if}
@@ -1104,7 +1115,7 @@
       {#if settingsError}
         <div class="notice notice--blocking" role="alert">{settingsError}</div>
       {:else}
-        <p class="empty-row">Loading OpenQuota…</p>
+        <p class="empty-row">{t('app.loading')}</p>
       {/if}
     </div>
   {/if}
@@ -1112,7 +1123,7 @@
     <div
       class="panel-resize-dragger panel-resize-dragger--bottom"
       role="separator"
-      aria-label="Resize panel height"
+      aria-label={t('app.resizePanelHeight')}
       aria-orientation="horizontal"
       onpointerdown={handlePanelResizePointerDown}
     ></div>

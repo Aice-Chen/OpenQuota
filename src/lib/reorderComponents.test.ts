@@ -12,6 +12,7 @@ const settings: AppSettings = {
   providerNames: {},
   knownProviderIds: ['codex', 'claude', 'antigravity'],
   showTotalSpend: false,
+  language: 'system',
   theme: 'system',
   density: 'default',
   reduceAnimations: false,
