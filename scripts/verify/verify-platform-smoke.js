@@ -41,7 +41,8 @@ const requireExactKeyLines = (source, content, expectations) => {
 };
 
 requireContracts('CI', ci, [
-  'os: [windows-latest, macos-latest, ubuntu-22.04]',
+  '["windows-latest","macos-latest","ubuntu-22.04"]',
+  '["windows-latest","ubuntu-22.04"]',
   'Test Windows Credential Manager integration',
   'Test macOS Keychain integration',
   'Test Linux Secret Service integration',

@@ -128,16 +128,16 @@ pub fn translate_unit(unit: &str, zh: bool) -> &str {
         return unit;
     }
     let key = unit.trim().to_ascii_lowercase();
-    shared()
-        .units
-        .get(&key)
-        .map(String::as_str)
-        .unwrap_or(unit)
+    shared().units.get(&key).map(String::as_str).unwrap_or(unit)
 }
 
 pub fn tray_menu_labels(zh: bool) -> &'static TrayMenuLabels {
     let menu = &shared().tray_menu;
-    if zh { &menu.zh_cn } else { &menu.en }
+    if zh {
+        &menu.zh_cn
+    } else {
+        &menu.en
+    }
 }
 
 pub fn tray_usage_word(used: bool, zh: bool) -> &'static str {

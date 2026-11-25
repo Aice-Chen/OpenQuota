@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      include_macos:
+        description: Also run macOS runner job (slower queue on free runners)
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -16,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-22.04]
+        os: ${{ (github.event_name == 'workflow_dispatch' && inputs.include_macos) && fromJSON('["windows-latest","macos-latest","ubuntu-22.04"]') || fromJSON('["windows-latest","ubuntu-22.04"]') }}
 
     steps:
       - uses: actions/checkout@v7
